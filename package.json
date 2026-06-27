@@ -1,0 +1,45 @@
+{
+  "name": "pi-meeting-blackboard",
+  "version": "0.1.0",
+  "description": "Blackboard-based brainstorm and debate meetings for pi subagents.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "blackboard",
+    "brainstorm",
+    "debate",
+    "subagents"
+  ],
+  "author": "Jarcis-cy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jarcis-cy/pi-meeting-blackboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jarcis-cy/pi-meeting-blackboard/issues"
+  },
+  "homepage": "https://github.com/Jarcis-cy/pi-meeting-blackboard#readme",
+  "files": [
+    "extensions",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^5.9.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
