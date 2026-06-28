@@ -1,6 +1,6 @@
 {
   "name": "pi-meeting-blackboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Blackboard-based brainstorm and debate meetings for pi subagents.",
   "type": "module",
   "keywords": [

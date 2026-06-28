@@ -2,28 +2,18 @@
 
 面向 [pi](https://github.com/earendil-works/pi-coding-agent) subagent 的黑板式头脑风暴和争论会议扩展。
 
-`pi-meeting-blackboard` 增加 `/brainstorm2` 和 `/debate2`。它不再把每个参与者的长篇发言传回主持人上下文，再让主持人复述、再补写会议记录；参与者会通过 append-only 的会议黑板工具，把完整发言直接写入 `.pi-meetings/...`。主会话只接收短卡片和主持人的结构化总结。
+`pi-meeting-blackboard` 提供两个会议命令：`/brainstorm2` 和 `/debate2`。会议中，每个参与者会把完整发言写入 `.pi-meetings/...` 下的 append-only 黑板文件。主会话展示紧凑的发言卡片和主持人的结构化总结，完整 transcript 则保留在磁盘上。
 
 English README: [README.md](./README.md).
 
-## 为什么需要它
+## 功能
 
-旧的纯 prompt 版 brainstorm/debate 有几个实际问题：
-
-- 子 Agent 输出较长时容易被工具输出限制截断。
-- 主持人上下文被迫承载“接收全文、复述全文、再记录全文”的重复数据流。
-- 会议记录是事后重建的，不是会议过程中的事实源。
-
-这个包把数据流改成：
-
-```text
-参与者 -> meeting_append_entry -> .pi-meetings/... 文件
-参与者 -> 短 WROTE_ENTRY 摘要 -> 主持人上下文
-文件 watcher -> 短卡片 -> 主会话可见区域
-主持人 -> 共识 / 分歧 / 最终结论
-```
-
-黑板文件天然就是 transcript。主持人只负责综合和推进。
+- 基于 `.pi-meetings/` 的黑板式会议记录。
+- 主会话中展示紧凑的参与者发言卡片。
+- 参与者完整发言以 Markdown 文件保存。
+- 使用 JSONL 索引作为轻量级跨轮上下文入口。
+- 内置头脑风暴和争论会议命令。
+- 首次使用时可安装内置的默认参与者 agent 定义。
 
 ## 安装
 
@@ -36,7 +26,7 @@ pi install npm:pi-meeting-blackboard
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-meeting-blackboard@v0.1.0
+pi install git:github.com/Jarcis-cy/pi-meeting-blackboard@v0.1.1
 ```
 
 本地开发安装：
@@ -47,7 +37,7 @@ pi install /Users/jarcis/Project/pi-meeting-blackboard
 
 ## 前置条件
 
-该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建黑板目录，然后让主 Agent 调用这些参与者：
+该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建会议黑板，然后让主 Agent 调用这些参与者：
 
 - `gpt-brainstormer`
 - `deepseek-brainstormer`
@@ -66,7 +56,16 @@ pi install /Users/jarcis/Project/pi-meeting-blackboard
 
 `/debate2` 启动开放式黑板争论，直到收敛或用户介入为止。
 
-它不会替换旧的 `/brainstorm` 和 `/debate`。
+## 工作方式
+
+```text
+参与者 -> meeting_append_entry -> .pi-meetings/... 文件
+参与者 -> 短 WROTE_ENTRY 摘要 -> 主持人上下文
+文件 watcher -> 短卡片 -> 主会话可见区域
+主持人 -> 共识 / 分歧 / 最终结论
+```
+
+黑板文件是会议事实源。主持人可以按需读取索引或具体条目，然后生成结构化总结。
 
 ## 工具
 
@@ -90,7 +89,7 @@ pi install /Users/jarcis/Project/pi-meeting-blackboard
     0002-deepseek-round_1.md
 ```
 
-`blackboard.md` 是自然形成的完整会议记录。`index.jsonl` 是紧凑索引。参与者全文放在 `entries/`。
+`blackboard.md` 是完整会议记录。`index.jsonl` 是紧凑索引。参与者全文放在 `entries/`。
 
 ## 安全边界
 

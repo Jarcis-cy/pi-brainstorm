@@ -2,28 +2,18 @@
 
 Blackboard-based brainstorm and debate meetings for [pi](https://github.com/earendil-works/pi-coding-agent) subagents.
 
-`pi-meeting-blackboard` adds `/brainstorm2` and `/debate2`. Instead of sending every participant's long answer through the facilitator's context and then asking the facilitator to repeat it, participants write their full contributions to `.pi-meetings/...` through an append-only meeting blackboard. The main chat receives only short entry cards and facilitator summaries.
+`pi-meeting-blackboard` adds two meeting commands, `/brainstorm2` and `/debate2`. In a meeting, each participant writes its full contribution to an append-only blackboard under `.pi-meetings/...`. The main chat shows compact entry cards and facilitator summaries, while the full transcript remains available on disk.
 
 中文说明见 [README.zh-CN.md](./README.zh-CN.md).
 
-## Why
+## Features
 
-The original prompt-only brainstorm/debate flow had three practical problems:
-
-- Long subagent outputs can be truncated by tool output limits.
-- The facilitator wastes context by receiving, repeating, and then recording the same text.
-- Meeting records are reconstructed after the fact instead of being the natural source of truth.
-
-This package changes the data flow:
-
-```text
-participant -> meeting_append_entry -> .pi-meetings/... files
-participant -> short WROTE_ENTRY summary -> facilitator context
-file watcher -> compact visible card -> main chat
-facilitator -> structural summary / final conclusion
-```
-
-The blackboard files become the transcript. The facilitator stays focused on synthesis.
+- Blackboard-based meeting records stored in `.pi-meetings/`.
+- Compact visible cards for participant entries in the main conversation.
+- Full participant contributions stored as Markdown files.
+- A JSONL index for lightweight cross-round context.
+- Built-in commands for brainstorming and debate workflows.
+- Bundled default participant agent definitions for first-time setup.
 
 ## Install
 
@@ -36,7 +26,7 @@ pi install npm:pi-meeting-blackboard
 From GitHub:
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-meeting-blackboard@v0.1.0
+pi install git:github.com/Jarcis-cy/pi-meeting-blackboard@v0.1.1
 ```
 
 For local development:
@@ -47,7 +37,7 @@ pi install /Users/jarcis/Project/pi-meeting-blackboard
 
 ## Prerequisites
 
-This extension expects pi's `subagent` tool to be available. The command handler creates the blackboard and then instructs the main agent to run:
+This extension expects pi's `subagent` tool to be available. The command handler creates the meeting blackboard and then instructs the main agent to run:
 
 - `gpt-brainstormer`
 - `deepseek-brainstormer`
@@ -66,7 +56,16 @@ On first use, if any of these user-level agents are missing, the extension asks 
 
 `/debate2` starts an open-ended blackboard debate that should continue until convergence or user intervention.
 
-The older `/brainstorm` and `/debate` commands are not replaced.
+## How It Works
+
+```text
+participant -> meeting_append_entry -> .pi-meetings/... files
+participant -> short WROTE_ENTRY summary -> facilitator context
+file watcher -> compact visible card -> main chat
+facilitator -> structural summary / final conclusion
+```
+
+The blackboard files are the source of truth for the meeting. The facilitator can read the index or specific entries when producing summaries.
 
 ## Tools
 
@@ -90,7 +89,7 @@ Each meeting writes an append-only folder under the current working directory:
     0002-deepseek-round_1.md
 ```
 
-`blackboard.md` is the natural transcript. `index.jsonl` is the compact context entry point. Full participant text lives in `entries/`.
+`blackboard.md` is the full meeting transcript. `index.jsonl` is the compact context entry point. Full participant text lives in `entries/`.
 
 ## Safety
 
