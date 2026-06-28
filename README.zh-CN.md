@@ -10,13 +10,14 @@ English README: [README.md](./README.md).
 
 ## 功能
 
-- 多模型头脑风暴：默认包含 GPT、DeepSeek、MiniMax 风格参与者。
+- 多模型头脑风暴：参与者可配置（默认：GPT、DeepSeek、MiniMax）。
 - 辩论 / battle 模式：Agent 会攻击、审视、反驳彼此的观点。
+- 配置驱动：通过 YAML 添加、删除或自定义参与者。
 - 每轮输出聚焦共识、分歧、关键问题和下一步方向。
 - 参与者完整发言以 Markdown 文件保存到 `.pi-meetings/`。
 - 主会话中展示紧凑发言卡片，而不是粘贴长篇 transcript。
 - 使用 JSONL 索引作为轻量级跨轮上下文入口。
-- 首次使用时可安装内置的默认参与者 agent 定义。
+- 由配置自动生成托管的 agent 文件——更新一个 YAML，所有 agent 同步。
 
 ## 安装
 
@@ -29,7 +30,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.2.0
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.3.0
 ```
 
 本地开发安装：
@@ -38,15 +39,53 @@ pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.2.0
 pi install /Users/jarcis/Project/pi-brainstorm
 ```
 
+## 配置
+
+参与者通过 YAML 定义。插件按以下顺序加载配置（后者覆盖前者）：
+
+1. 包默认配置：`config/default.yaml`（随包发布）
+2. 用户级覆盖：`~/.pi/agent/pi-brainstorm.yaml`
+3. 项目级覆盖：`.pi-brainstorm.yaml` 或 `.pi/pi-brainstorm.yaml`
+
+数组（如 `participants`）整体替换；对象字段深度合并。
+
+### 添加新参与者
+
+创建 `~/.pi/agent/pi-brainstorm.yaml`（用户级）或 `.pi-brainstorm.yaml`（项目级）：
+
+```yaml
+participants:
+  - displayName: Claude
+    agentName: claude-brainstormer
+    description: Claude 头脑风暴顾问。细致入微的分析师，用于多模型讨论。
+    model: anthropic/claude-sonnet-4-20250514:xhigh
+    roleTitle: 细致分析师
+    rolePrompt: |
+      你是多模型头脑风暴中的分析顾问。擅长细致入微的论证和长篇分析。用中文回答。
+    whatYouDo:
+      - 提供细致、深入的逐点分析
+      - 识别细微差别和边缘情况
+      - 撰写结构清晰的长篇论证
+    debatePersona:
+      label: THE ANALYST
+      prompt: |
+        DEBATE MODE. You are THE ANALYST. Dissect every argument with precision. Find the weakest link in every chain of reasoning. Use Chinese.
+    brainstormRole: 细致分析师
+```
+
+如需完全替换默认参与者，在覆盖文件中定义完整的 `participants` 列表即可。
+
+用户级配置可以在确认后创建或更新 `~/.pi/agent/agents/` 下的受管理 agent 文件。项目级配置只影响当前会话编排，但不会自动写入全局 agent 文件；如果需要自动同步 agent，请手动创建对应 agent，或把配置移到 `~/.pi/agent/pi-brainstorm.yaml`。
+
+### 托管的 Agent 文件
+
+由 pi-brainstorm 生成的 agent 文件包含 `<!-- managed-by: pi-brainstorm -->` 标记。当配置变更时，这些文件会被覆盖。不含此标记的已有 agent 文件永远不会被修改。
+
 ## 前置条件
 
-该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建本地会议记录，然后让主 Agent 调用这些参与者：
+该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建本地会议记录，然后让主 Agent 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`）。
 
-- `gpt-brainstormer`
-- `deepseek-brainstormer`
-- `minimax-brainstormer`
-
-第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否把内置默认定义写入 `~/.pi/agent/agents/`。已有同名文件不会被覆盖。
+第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否写入内置默认定义。已有同名且不含托管标记的文件不会被覆盖。
 
 ## 命令
 

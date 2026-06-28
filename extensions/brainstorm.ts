@@ -1,11 +1,13 @@
 /**
  * pi-brainstorm — Multi-model brainstorm/debate extension for Pi
  *
- * Runs brainstorm and battle-style debate sessions across multiple subagents.
- * Full participant contributions are stored in a local filesystem blackboard,
- * while the main conversation sees compact cards and facilitator synthesis.
+ * Runs brainstorm and debate sessions across multiple subagents configured
+ * via YAML. Full participant contributions are stored in a local filesystem
+ * blackboard, while the main conversation sees compact cards and facilitator
+ * synthesis.
  *
  * Features:
+ * - Configuration-driven participants (YAML)
  * - meeting_append_entry tool — concurrency-safe append to meeting folder
  * - meeting_read_index tool — read meeting index
  * - meeting_read_entry tool — read full entry content
@@ -13,15 +15,629 @@
  * - /debate command — open-ended multi-agent debate
  * - meeting-entry message renderer — compact cards with expandable content
  * - File watcher — auto-posts new entries into the main conversation
+ * - Managed agent file generation from config
  */
 
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Text, Box } from "@earendil-works/pi-tui";
+import * as YAML from "yaml";
+
+// ────────────────────────────────────────────────────────
+// Types
+// ────────────────────────────────────────────────────────
+
+interface DebatePersona {
+  label: string;
+  prompt: string;
+}
+
+interface ParticipantConfig {
+  displayName: string;
+  agentName: string;
+  description?: string;
+  model: string;
+  roleTitle?: string;
+  rolePrompt: string;
+  whatYouDo?: string[];
+  debatePersona?: DebatePersona;
+  brainstormRole?: string;
+  tools?: string[];
+}
+
+interface BrainstormConfig {
+  participants: ParticipantConfig[];
+}
+
+// ────────────────────────────────────────────────────────
+// Constants
+// ────────────────────────────────────────────────────────
+
+const MANAGED_MARKER = "<!-- managed-by: pi-brainstorm -->";
+const DEFAULT_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "meeting_append_entry",
+  "meeting_read_index",
+  "meeting_read_entry",
+];
+
+// ────────────────────────────────────────────────────────
+// Config helpers
+// ────────────────────────────────────────────────────────
+
+/**
+ * Deep-merge two values. Arrays are replaced entirely; objects are
+ * shallow-merged recursively; scalars use the overlay value.
+ */
+function deepMerge(base: any, overlay: any): any {
+  if (overlay === null || overlay === undefined) return base;
+  if (base === null || base === undefined) return overlay;
+
+  if (Array.isArray(base) && Array.isArray(overlay)) {
+    return overlay;
+  }
+
+  if (
+    typeof base === "object" &&
+    typeof overlay === "object" &&
+    !Array.isArray(base) &&
+    !Array.isArray(overlay)
+  ) {
+    const result: Record<string, any> = { ...base };
+    for (const key of Object.keys(overlay)) {
+      result[key] =
+        key in result
+          ? deepMerge(result[key], overlay[key])
+          : overlay[key];
+    }
+    return result;
+  }
+
+  return overlay;
+}
+
+/**
+ * Resolve extension directory from import.meta.url.
+ */
+function getExtensionDir(): string {
+  return path.dirname(fileURLToPath(import.meta.url));
+}
+
+/**
+ * Load and merge config from all locations, in priority order (later wins):
+ *   1. Package default: config/default.yaml (relative to package root or extension dir)
+ *      Also try brainstorm.yaml in extension dir (for manual installs)
+ *   2. User override: ~/.pi/agent/pi-brainstorm.yaml
+ *   3. Project override: {cwd}/.pi-brainstorm.yaml
+ *   4. Project override: {cwd}/.pi/pi-brainstorm.yaml
+ */
+function hasProjectConfig(cwd: string): boolean {
+  if (!cwd) return false;
+  return [
+    path.join(cwd, ".pi-brainstorm.yaml"),
+    path.join(cwd, ".pi", "pi-brainstorm.yaml"),
+  ].some((candidate) => fs.existsSync(candidate));
+}
+
+function loadConfig(cwd: string): BrainstormConfig {
+  const extensionDir = getExtensionDir();
+  const packageRoot = path.dirname(extensionDir);
+
+  // Step 1: package/extension defaults
+  const defaultCandidates = [
+    path.join(packageRoot, "config", "default.yaml"),
+    path.join(extensionDir, "config", "default.yaml"),
+    path.join(extensionDir, "brainstorm.yaml"),
+  ];
+
+  let merged: any = {};
+  let loadedAny = false;
+
+  for (const candidate of defaultCandidates) {
+    if (fs.existsSync(candidate)) {
+      try {
+        const raw = fs.readFileSync(candidate, "utf-8");
+        const parsed = YAML.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          merged = deepMerge(merged, parsed);
+          loadedAny = true;
+        }
+      } catch (err: any) {
+        throw new Error(
+          `Failed to parse config ${candidate}: ${err.message}`
+        );
+      }
+    }
+  }
+
+  if (!loadedAny) {
+    throw new Error(
+      "No pi-brainstorm config found. Expected config/default.yaml in package root or extension directory."
+    );
+  }
+
+  // Step 2: user override
+  const userPath = path.join(getAgentDir(), "pi-brainstorm.yaml");
+  if (fs.existsSync(userPath)) {
+    try {
+      const raw = fs.readFileSync(userPath, "utf-8");
+      const parsed = YAML.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        merged = deepMerge(merged, parsed);
+      }
+    } catch (err: any) {
+      throw new Error(
+        `Failed to parse user config ${userPath}: ${err.message}`
+      );
+    }
+  }
+
+  // Step 3: project overrides
+  const projectCandidates = cwd
+    ? [path.join(cwd, ".pi-brainstorm.yaml"), path.join(cwd, ".pi", "pi-brainstorm.yaml")]
+    : [];
+
+  for (const candidate of projectCandidates) {
+    if (fs.existsSync(candidate)) {
+      try {
+        const raw = fs.readFileSync(candidate, "utf-8");
+        const parsed = YAML.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          merged = deepMerge(merged, parsed);
+        }
+      } catch (err: any) {
+        throw new Error(
+          `Failed to parse project config ${candidate}: ${err.message}`
+        );
+      }
+    }
+  }
+
+  return merged as BrainstormConfig;
+}
+
+/**
+ * Resolve and validate participants for a command invocation.
+ * Returns validated participant array; throws with a clear message on failure.
+ */
+function isSafeAgentName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$/.test(value);
+}
+
+function resolveParticipants(cwd: string): ParticipantConfig[] {
+  const config = loadConfig(cwd);
+
+  if (
+    !config.participants ||
+    !Array.isArray(config.participants) ||
+    config.participants.length === 0
+  ) {
+    throw new Error(
+      "pi-brainstorm config must define at least one participant under 'participants'."
+    );
+  }
+
+  const requiredFields: (keyof ParticipantConfig)[] = [
+    "displayName",
+    "agentName",
+    "model",
+    "rolePrompt",
+  ];
+
+  for (let i = 0; i < config.participants.length; i++) {
+    const p = config.participants[i];
+    for (const field of requiredFields) {
+      if (!p[field]) {
+        throw new Error(
+          `Participant at index ${i} is missing required field "${field}".`
+        );
+      }
+    }
+    if (typeof p.displayName !== "string" || !p.displayName.trim()) {
+      throw new Error(
+        `Participant at index ${i} has invalid displayName.`
+      );
+    }
+    if (typeof p.agentName !== "string" || !p.agentName.trim()) {
+      throw new Error(
+        `Participant at index ${i} has invalid agentName.`
+      );
+    }
+    if (!isSafeAgentName(p.agentName)) {
+      throw new Error(
+        `Participant "${p.displayName}" has unsafe agentName "${p.agentName}". Use only letters, digits, dot, underscore, and hyphen; it must start with a letter or digit.`
+      );
+    }
+    if (typeof p.model !== "string" || !p.model.trim()) {
+      throw new Error(
+        `Participant at index ${i} has invalid model.`
+      );
+    }
+    if (typeof p.rolePrompt !== "string" || !p.rolePrompt.trim()) {
+      throw new Error(
+        `Participant at index ${i} has invalid rolePrompt.`
+      );
+    }
+  }
+
+  return config.participants;
+}
+
+// ────────────────────────────────────────────────────────
+// Agent file generation
+// ────────────────────────────────────────────────────────
+
+/**
+ * Generate the content of a managed agent markdown file from a participant config.
+ */
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
+function generateAgentFile(participant: ParticipantConfig): string {
+  const tools = participant.tools && participant.tools.length > 0
+    ? participant.tools
+    : DEFAULT_TOOLS;
+  const toolsStr = tools.join(", ");
+
+  const description =
+    participant.description ||
+    `${participant.displayName} brainstorming consultant.`;
+
+  const roleTitle = participant.roleTitle
+    ? ` - ${participant.roleTitle}`
+    : "";
+
+  const whatYouDoLines = (participant.whatYouDo && participant.whatYouDo.length > 0)
+    ? participant.whatYouDo.map((item) => `- ${item}`).join("\n")
+    : `- 参与多模型讨论并提供${participant.displayName}视角的分析`;
+
+  return [
+    MANAGED_MARKER,
+    "---",
+    `name: ${yamlScalar(participant.agentName)}`,
+    `description: ${yamlScalar(description)}`,
+    `tools: ${toolsStr}`,
+    `model: ${yamlScalar(participant.model)}`,
+    "---",
+    "",
+    `# ${participant.displayName} Brainstormer${roleTitle}`,
+    "",
+    participant.rolePrompt,
+    "",
+    "## What You Do",
+    whatYouDoLines,
+    "",
+    "## What You Do Not Do",
+    "- 写代码或修改项目文件，你只读项目文件",
+    "- 委派给其他 Agent",
+    "- 在聊天中直接粘贴长篇分析；当明确指示使用 meeting_append_entry 时，必须将完整贡献写入会议黑板，最终回复仅写 WROTE_ENTRY + 一句话摘要",
+    "",
+    "## Worker Preamble",
+    "You are a terminal worker. Work directly with tools. Do NOT spawn sub-agents.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Ensure agent files exist for all configured participants.
+ * - Files with the managed marker are overwritten from current config.
+ * - Files without the marker are never touched.
+ * - Missing files are created after user confirmation.
+ *
+ * Returns true if all participants have existing agent files (managed or not).
+ */
+async function safeWriteAgentFile(targetPath: string, content: string, mode: "create" | "update"): Promise<void> {
+  const dir = path.dirname(targetPath);
+  assertDirectoryNoSymlink(dir, "agents directory");
+  assertPathInside(fs.realpathSync(dir), path.resolve(targetPath), "agent file");
+
+  if (mode === "create") {
+    await fsp.writeFile(targetPath, content, { encoding: "utf-8", flag: "wx" });
+    return;
+  }
+
+  assertExistingFileNoSymlink(targetPath, "agent file");
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(targetPath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  await fsp.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+  try {
+    await fsp.rename(tempPath, targetPath);
+  } catch (err) {
+    try {
+      await fsp.unlink(tempPath);
+    } catch {
+      // Ignore cleanup errors.
+    }
+    throw err;
+  }
+}
+
+async function ensureAgentsFromConfig(
+  ctx: any,
+  participants: ParticipantConfig[],
+  options: { allowGlobalWrites: boolean }
+): Promise<boolean> {
+  const agentsDir = path.join(getAgentDir(), "agents");
+
+  const planned: { filename: string; action: "create" | "update" }[] = [];
+  const protectedFiles: string[] = [];
+
+  for (const p of participants) {
+    const filename = `${p.agentName}.md`;
+    const targetPath = path.resolve(agentsDir, filename);
+    assertPathInside(agentsDir, targetPath, "agent file");
+
+    if (fs.existsSync(targetPath)) {
+      assertExistingFileNoSymlink(targetPath, "agent file");
+      const content = fs.readFileSync(targetPath, "utf-8");
+      if (content.includes(MANAGED_MARKER)) {
+        planned.push({ filename, action: "update" });
+      } else {
+        protectedFiles.push(filename);
+      }
+    } else {
+      planned.push({ filename, action: "create" });
+    }
+  }
+
+  // If nothing to create or update, we're done
+  if (planned.length === 0) {
+    return true;
+  }
+
+  if (!options.allowGlobalWrites) {
+    ctx.ui?.notify?.(
+      "Project-level pi-brainstorm config is active. For safety, this command will not create or update global agent files. Create the listed agents manually or move the config to ~/.pi/agent/pi-brainstorm.yaml.",
+      "warning"
+    );
+    return false;
+  }
+
+  // Non-interactive mode
+  if (!ctx.hasUI) {
+    // Update managed files silently
+    await fsp.mkdir(agentsDir, { recursive: true });
+    assertDirectoryNoSymlink(agentsDir, "agents directory");
+    for (const plan of planned) {
+      if (plan.action === "update") {
+        const p = participants.find(
+          (p) => `${p.agentName}.md` === plan.filename
+        )!;
+        const targetPath = path.resolve(agentsDir, plan.filename);
+        assertPathInside(agentsDir, targetPath, "agent file");
+        await safeWriteAgentFile(
+          targetPath,
+          generateAgentFile(p),
+          "update"
+        );
+      }
+    }
+    // Report missing
+    const missing = planned.filter((p) => p.action === "create");
+    if (missing.length > 0) {
+      ctx.ui?.notify?.(
+        `Missing meeting agents: ${missing.map((m) => m.filename).join(", ")}. Install them under ${agentsDir}.`,
+        "warning"
+      );
+      return false;
+    }
+    return true;
+  }
+
+  // Interactive mode: ask user
+  let message = "";
+  if (planned.length > 0) {
+    const actionWord = planned.some((p) => p.action === "update")
+      ? "created/updated"
+      : "created";
+    message += `The following agent files will be ${actionWord}:\n`;
+    for (const p of planned) {
+      message += `  - ${p.filename} (${p.action})\n`;
+    }
+  }
+  if (protectedFiles.length > 0) {
+    message += `\nThe following existing files are NOT managed by pi-brainstorm and will be left untouched:\n`;
+    for (const f of protectedFiles) {
+      message += `  - ${f}\n`;
+    }
+  }
+
+  const title = planned.some((p) => p.action === "update")
+    ? "Update brainstorm agents?"
+    : "Install brainstorm agents?";
+
+  const ok = await ctx.ui.confirm(
+    title,
+    message + `\nFiles will be written to ${agentsDir}.`
+  );
+  if (!ok) return false;
+
+  await fsp.mkdir(agentsDir, { recursive: true });
+  assertDirectoryNoSymlink(agentsDir, "agents directory");
+  for (const plan of planned) {
+    const p = participants.find(
+      (p) => `${p.agentName}.md` === plan.filename
+    )!;
+    const targetPath = path.resolve(agentsDir, plan.filename);
+    assertPathInside(agentsDir, targetPath, "agent file");
+    await safeWriteAgentFile(targetPath, generateAgentFile(p), plan.action);
+  }
+
+  ctx.ui.notify(`Updated ${planned.length} agent file(s).`, "info");
+  return true;
+}
+
+// ────────────────────────────────────────────────────────
+// Prompt builders
+// ────────────────────────────────────────────────────────
+
+/**
+ * Build the facilitator prompt for /brainstorm.
+ */
+function buildBrainstormPrompt(
+  topic: string,
+  absDir: string,
+  participants: ParticipantConfig[]
+): string {
+  const consultantLines = participants
+    .map(
+      (p) =>
+        `- **${p.displayName}**: use the ${p.agentName} subagent. ${p.brainstormRole || p.roleTitle || "Consultant"}.`
+    )
+    .join("\n");
+
+  const agentTaskLines = participants
+    .map(
+      (p) =>
+        `   - speaker: "${p.displayName}"`
+    )
+    .join("\n");
+
+  return [
+    `BLACKBOARD BRAINSTORMING SESSION: ${topic}`,
+    "",
+    `Meeting folder: \`${absDir}\``,
+    "",
+    "You are facilitating a round-robin brainstorming session using the MEETING BLACKBOARD.",
+    "Each consultant writes their FULL contribution to disk via meeting_append_entry.",
+    "",
+    "## Consultants (3 rounds)",
+    consultantLines,
+    "",
+    "## CRITICAL INSTRUCTIONS",
+    "",
+    "### For subagents (include in EVERY task):",
+    "1. Write your FULL contribution using the meeting_append_entry tool with:",
+    `   - meetingDir: "${absDir}"`,
+    "   - speaker: your display name, e.g.:",
+    agentTaskLines,
+    '   - phase: "Round 1", "Round 2", or "Round 3"',
+    "   - summary: a ONE-SENTENCE summary of your contribution",
+    "   - content: your FULL analysis in Chinese (中文)",
+    "2. After writing, your FINAL ANSWER must be ONLY:",
+    "   `WROTE_ENTRY: <your one-sentence summary>`",
+    "3. DO NOT paste your full analysis into the chat. The main agent and user will read it from the blackboard.",
+    "",
+    "### For you, the facilitator:",
+    "- Do NOT paste participant full text into chat. They are on the blackboard.",
+    "- After each round, read the index with meeting_read_index and present a structural overview.",
+    "- Optionally read full entries with meeting_read_entry when needed.",
+    "- Present each consultant's summary + your structural overview (conflict matrix, consensus table).",
+    "- When the user gives feedback, relay it VERBATIM to the consultants in the next round.",
+    "",
+    "## Protocol",
+    "Round 1: Each consultant gives initial analysis on the topic. Run all in parallel.",
+    "Round 2: Feed prior discussion back to each. Ask each to challenge the others and propose improvements.",
+    "Round 3: Each gives FINAL recommendation, synthesizing the best ideas.",
+    "",
+    "After Round 3, present the complete structural overview and a synthesized conclusion.",
+    "",
+    "## IMPORTANT",
+    "- All responses in Chinese (中文).",
+    "- Save transcript.md and (after user confirms) conclusion.md per the MEETING OUTPUT PROTOCOL.",
+    "- The user can intervene at any time to steer the discussion.",
+  ].join("\n");
+}
+
+/**
+ * Build the facilitator prompt for /debate.
+ */
+function buildDebatePrompt(
+  topic: string,
+  absDir: string,
+  participants: ParticipantConfig[]
+): string {
+  const debaterLines = participants
+    .map((p) => {
+      const dp = p.debatePersona;
+      if (dp) {
+        return `- **${p.displayName}** (${p.agentName}): ${dp.label} — Attack other positions, find flaws, expose assumptions.`;
+      }
+      return `- **${p.displayName}** (${p.agentName})`;
+    })
+    .join("\n");
+
+  // Build per-agent debate task prefixes for the facilitator to include
+  const taskPrefixLines = participants
+    .map((p) => {
+      const dp = p.debatePersona;
+      if (dp && dp.prompt) {
+        return `**${p.displayName}** (${p.agentName}):\n${dp.prompt}`;
+      }
+      return `**${p.displayName}** (${p.agentName}): Debate participant.`;
+    })
+    .join("\n\n");
+
+  const agentTaskLines = participants
+    .map(
+      (p) =>
+        `   - speaker: "${p.displayName}"`
+    )
+    .join("\n");
+
+  return [
+    `⚔️ BLACKBOARD DEBATE: ${topic}`,
+    "",
+    `Meeting folder: \`${absDir}\``,
+    "",
+    "You are facilitating an OPEN-ENDED debate using the MEETING BLACKBOARD.",
+    "Each debater writes their FULL argument to disk via meeting_append_entry.",
+    "Continue until the debate CONVERGES or the user intervenes.",
+    "",
+    "## Debaters (cycling indefinitely)",
+    debaterLines,
+    "",
+    "## DEBATE PERSONAS (include in each subagent task)",
+    taskPrefixLines,
+    "",
+    "## CRITICAL INSTRUCTIONS",
+    "",
+    "### For subagents (include in EVERY task):",
+    "1. Write your FULL contribution using the meeting_append_entry tool with:",
+    `   - meetingDir: "${absDir}"`,
+    "   - speaker: your display name, e.g.:",
+    agentTaskLines,
+    '   - phase: "Cycle 1", "Cycle 2", etc.',
+    "   - summary: a ONE-SENTENCE summary of your argument",
+    "   - content: your FULL argument in Chinese (中文)",
+    "2. After writing, your FINAL ANSWER must be ONLY:",
+    "   `WROTE_ENTRY: <your one-sentence summary>`",
+    "3. DO NOT paste your full argument into the chat.",
+    "",
+    "### Include the FULL VERBATIM prior debate record in each subagent task.",
+    "Use meeting_read_index and meeting_read_entry to retrieve the complete debate history.",
+    "NEVER summarize or truncate the debate record when passing to subagents.",
+    "",
+    "### For you, the facilitator:",
+    "- Do NOT paste participant full text into chat. They are on the blackboard.",
+    "- Cycle through debaters in sequence (chain mode) so each sees all prior entries.",
+    "- Read the index with meeting_read_index frequently.",
+    "- Read full entries with meeting_read_entry when synthesizing.",
+    "- After EACH full cycle (all debaters spoke once), check for CONVERGENCE:",
+    "  * Do 2+ agents agree on a specific conclusion?",
+    "  * Did the last cycle introduce any NEW arguments?",
+    "  * Did anyone explicitly concede?",
+    "- If NOT converged: run another cycle. Keep going.",
+    "- If converged: present synthesis to me.",
+    "",
+    "## Rules",
+    "- NEVER stop at a predetermined count. Only convergence or user intervention ends this debate.",
+    "- All responses in Chinese (中文).",
+    "- After convergence, save transcript.md immediately and (after user confirms) conclusion.md per the MEETING OUTPUT PROTOCOL.",
+    "- Present: (1) the debate arc, (2) who conceded what, (3) final synthesis.",
+  ].join("\n");
+}
 
 // ────────────────────────────────────────────────────────
 // Helpers
@@ -29,12 +645,14 @@ import { Text, Box } from "@earendil-works/pi-tui";
 
 /** Sanitize a string for use in filenames (keep letters, digits, hyphens, underscores). */
 function sanitizeFilenamePart(raw: string): string {
-  return raw
-    .replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "")
-    .slice(0, 60)
-    .toLowerCase() || "unknown";
+  return (
+    raw
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "")
+      .slice(0, 60)
+      .toLowerCase() || "unknown"
+  );
 }
 
 /** Convert a topic string to a filesystem-safe slug. */
@@ -162,7 +780,11 @@ function startWatching(pi: ExtensionAPI, meetingDir: string): void {
         try {
           if (!fs.existsSync(entryPath)) return;
           assertExistingFileNoSymlink(entryPath, "meeting entry");
-          assertPathInside(fs.realpathSync(entriesDir), fs.realpathSync(entryPath), "meeting entry real path");
+          assertPathInside(
+            fs.realpathSync(entriesDir),
+            fs.realpathSync(entryPath),
+            "meeting entry real path"
+          );
           const parsed = parseEntryFilename(filename);
           if (!parsed) return;
           const summary = readEntrySummary(entryPath);
@@ -189,7 +811,7 @@ function startWatching(pi: ExtensionAPI, meetingDir: string): void {
     );
   });
 
-  watcher.on("error", () => {
+  (watcher as any).on?.("error", () => {
     // Silently handle watcher errors (e.g., directory deleted)
   });
 
@@ -219,116 +841,6 @@ interface MeetingManifest {
   created: string;
   lastUpdate: string;
   entryCount: number;
-}
-
-const BRAINSTORM_AGENT_FILES: Record<string, string> = {
-  "gpt-brainstormer.md": `---
-name: gpt-brainstormer
-description: GPT brainstorming consultant. Visionary strategist for multi-model discussion sessions.
-tools: read, grep, find, ls, meeting_append_entry, meeting_read_index, meeting_read_entry
-model: vendor-codex/gpt-5.5:xhigh
----
-
-# GPT Brainstormer - Visionary Strategist
-
-你是多模型头脑风暴中的愿景战略家。思考大局，发现别人忽略的机会，将复杂权衡综合为清晰方向。用中文回答。
-
-## What You Do
-- 提出创新的战略方向和解决方案
-- 发现别人忽略的机会和盲点
-- 把零散想法综合成连贯战略
-
-## What You Do Not Do
-- 写代码或修改项目文件，你只读项目文件
-- 委派给其他 Agent
-- 在聊天中直接粘贴长篇分析；当明确指示使用 meeting_append_entry 时，必须将完整贡献写入会议黑板，最终回复仅写 WROTE_ENTRY + 一句话摘要
-
-## Worker Preamble
-You are a terminal worker. Work directly with tools. Do NOT spawn sub-agents.
-`,
-  "deepseek-brainstormer.md": `---
-name: deepseek-brainstormer
-description: DeepSeek brainstorming consultant. Meticulous systems thinker for multi-model discussion sessions.
-tools: read, grep, find, ls, meeting_append_entry, meeting_read_index, meeting_read_entry
-model: deepseek/deepseek-v4-pro:xhigh
----
-
-# DeepSeek Brainstormer - Meticulous Systems Thinker
-
-你是多模型头脑风暴中的系统思考者。分析结构、依赖、扩展上限和失败模式。用中文回答。
-
-## What You Do
-- 从结构、依赖和风险角度分析提案
-- 识别隐藏耦合、扩展上限和失败模式
-- 提出具体、可实现、可验证的技术优化方案
-
-## What You Do Not Do
-- 写代码或修改项目文件，你只读项目文件
-- 委派给其他 Agent
-- 在聊天中直接粘贴长篇分析；当明确指示使用 meeting_append_entry 时，必须将完整贡献写入会议黑板，最终回复仅写 WROTE_ENTRY + 一句话摘要
-
-## Worker Preamble
-You are a terminal worker. Work directly with tools. Do NOT spawn sub-agents.
-`,
-  "minimax-brainstormer.md": `---
-name: minimax-brainstormer
-description: MiniMax brainstorming consultant. Creative lateral thinker for multi-model discussion sessions.
-tools: read, grep, find, ls, meeting_append_entry, meeting_read_index, meeting_read_entry
-model: minimax-cn/MiniMax-M3:xhigh
----
-
-# MiniMax Brainstormer - Creative Lateral Thinker
-
-你是多模型头脑风暴中的创意顾问。跳出框框思考，挑战隐性假设，提出非常规方案。用中文回答。
-
-## What You Do
-- 从意想不到的角度切入问题
-- 提出打破常规的创新方案
-- 挑战团队隐性假设
-
-## What You Do Not Do
-- 写代码或修改项目文件，你只读项目文件
-- 委派给其他 Agent
-- 在聊天中直接粘贴长篇分析；当明确指示使用 meeting_append_entry 时，必须将完整贡献写入会议黑板，最终回复仅写 WROTE_ENTRY + 一句话摘要
-
-## Worker Preamble
-You are a terminal worker. Work directly with tools. Do NOT spawn sub-agents.
-`,
-};
-
-async function ensureBrainstormAgents(ctx: any): Promise<boolean> {
-  const agentsDir = path.join(getAgentDir(), "agents");
-  const missing = Object.keys(BRAINSTORM_AGENT_FILES).filter(
-    (filename) => !fs.existsSync(path.join(agentsDir, filename))
-  );
-  if (missing.length === 0) return true;
-
-  if (!ctx.hasUI) {
-    ctx.ui?.notify?.(
-      `Missing meeting agents: ${missing.join(", ")}. Install them under ${agentsDir}.`,
-      "warning"
-    );
-    return false;
-  }
-
-  const ok = await ctx.ui.confirm(
-    "Install meeting brainstorm agents?",
-    `The blackboard meeting commands need these user-level agents:\n${missing
-      .map((name) => `- ${name}`)
-      .join("\n")}\n\nThey will be created under ${agentsDir}. Existing files are not overwritten.`
-  );
-  if (!ok) return false;
-
-  await fsp.mkdir(agentsDir, { recursive: true });
-  for (const filename of missing) {
-    const target = path.join(agentsDir, filename);
-    await fsp.writeFile(target, BRAINSTORM_AGENT_FILES[filename], {
-      encoding: "utf-8",
-      flag: "wx",
-    });
-  }
-  ctx.ui.notify(`Installed ${missing.length} meeting agent(s).`, "info");
-  return true;
 }
 
 async function readManifest(absDir: string): Promise<MeetingManifest | null> {
@@ -428,7 +940,6 @@ export default function (pi: ExtensionAPI) {
         // Read or create manifest
         let manifest = await readManifest(absDir);
         if (!manifest) {
-          // Should not normally happen — commands seed the manifest
           manifest = {
             topic: path.basename(absDir),
             created: new Date().toISOString(),
@@ -620,7 +1131,11 @@ export default function (pi: ExtensionAPI) {
 
       try {
         assertExistingFileNoSymlink(absEntryPath, "meeting entry");
-        assertPathInside(fs.realpathSync(absDir), fs.realpathSync(absEntryPath), "meeting entry real path");
+        assertPathInside(
+          fs.realpathSync(absDir),
+          fs.realpathSync(absEntryPath),
+          "meeting entry real path"
+        );
         const content = await fsp.readFile(absEntryPath, "utf-8");
         return {
           content: [
@@ -682,7 +1197,11 @@ export default function (pi: ExtensionAPI) {
         try {
           assertExistingFileNoSymlink(details.path, "meeting entry");
           if (details.meetingDir) {
-            assertPathInside(fs.realpathSync(details.meetingDir), fs.realpathSync(details.path), "meeting entry real path");
+            assertPathInside(
+              fs.realpathSync(details.meetingDir),
+              fs.realpathSync(details.path),
+              "meeting entry real path"
+            );
           }
           const fullContent = fs.readFileSync(details.path, "utf-8");
           text += `\n\n${theme.fg("dim", fullContent)}`;
@@ -708,7 +1227,21 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const agentsReady = await ensureBrainstormAgents(ctx);
+      // Resolve participants from config
+      let participants: ParticipantConfig[];
+      try {
+        participants = resolveParticipants(ctx.cwd);
+      } catch (err: any) {
+        ctx.ui.notify(
+          `pi-brainstorm config error: ${err.message}`,
+          "error"
+        );
+        return;
+      }
+
+      const agentsReady = await ensureAgentsFromConfig(ctx, participants, {
+        allowGlobalWrites: !hasProjectConfig(ctx.cwd),
+      });
       if (!agentsReady) return;
 
       const topic = args.trim();
@@ -723,7 +1256,10 @@ export default function (pi: ExtensionAPI) {
       // Create meeting folder structure
       await fsp.mkdir(path.join(absDir, "entries"), { recursive: true });
       assertDirectoryNoSymlink(absDir, "meeting directory");
-      assertDirectoryNoSymlink(path.join(absDir, "entries"), "entries directory");
+      assertDirectoryNoSymlink(
+        path.join(absDir, "entries"),
+        "entries directory"
+      );
 
       // Seed manifest
       const manifest: MeetingManifest = {
@@ -765,54 +1301,11 @@ export default function (pi: ExtensionAPI) {
       );
 
       // Send orchestration prompt to main agent
+      const promptText = buildBrainstormPrompt(topic, absDir, participants);
       pi.sendUserMessage([
         {
           type: "text" as const,
-          text: [
-            `BLACKBOARD BRAINSTORMING SESSION: ${topic}`,
-            "",
-            `Meeting folder: \`${absDir}\``,
-            "",
-            "You are facilitating a round-robin brainstorming session using the MEETING BLACKBOARD.",
-            "Each consultant writes their FULL contribution to disk via meeting_append_entry.",
-            "",
-            "## Consultants (3 rounds)",
-            "- **GPT**: use the gpt-brainstormer subagent. Visionary strategist.",
-            "- **DeepSeek**: use the deepseek-brainstormer subagent. Systems thinker.",
-            "- **MiniMax**: use the minimax-brainstormer subagent. Creative lateral thinker.",
-            "",
-            "## CRITICAL INSTRUCTIONS",
-            "",
-            "### For subagents (include in EVERY task):",
-            "1. Write your FULL contribution using the meeting_append_entry tool with:",
-            `   - meetingDir: "${absDir}"`,
-            "   - speaker: your name (GPT, DeepSeek, or MiniMax)",
-            '   - phase: "Round 1", "Round 2", or "Round 3"',
-            "   - summary: a ONE-SENTENCE summary of your contribution",
-            "   - content: your FULL analysis in Chinese (中文)",
-            "2. After writing, your FINAL ANSWER must be ONLY:",
-            "   `WROTE_ENTRY: <your one-sentence summary>`",
-            "3. DO NOT paste your full analysis into the chat. The main agent and user will read it from the blackboard.",
-            "",
-            "### For you, the facilitator:",
-            "- Do NOT paste participant full text into chat. They are on the blackboard.",
-            "- After each round, read the index with meeting_read_index and present a structural overview.",
-            "- Optionally read full entries with meeting_read_entry when needed.",
-            "- Present each consultant's summary + your structural overview (conflict matrix, consensus table).",
-            "- When the user gives feedback, relay it VERBATIM to the consultants in the next round.",
-            "",
-            "## Protocol",
-            "Round 1: Each consultant gives initial analysis on the topic. Run all 3 in parallel.",
-            "Round 2: Feed prior discussion back to each. Ask each to challenge the others and propose improvements.",
-            "Round 3: Each gives FINAL recommendation, synthesizing the best ideas.",
-            "",
-            "After Round 3, present the complete structural overview and a synthesized conclusion.",
-            "",
-            "## IMPORTANT",
-            "- All responses in Chinese (中文).",
-            "- Save transcript.md and (after user confirms) conclusion.md per the MEETING OUTPUT PROTOCOL.",
-            "- The user can intervene at any time to steer the discussion.",
-          ].join("\n"),
+          text: promptText,
         },
       ]);
     },
@@ -829,7 +1322,21 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const agentsReady = await ensureBrainstormAgents(ctx);
+      // Resolve participants from config
+      let participants: ParticipantConfig[];
+      try {
+        participants = resolveParticipants(ctx.cwd);
+      } catch (err: any) {
+        ctx.ui.notify(
+          `pi-brainstorm config error: ${err.message}`,
+          "error"
+        );
+        return;
+      }
+
+      const agentsReady = await ensureAgentsFromConfig(ctx, participants, {
+        allowGlobalWrites: !hasProjectConfig(ctx.cwd),
+      });
       if (!agentsReady) return;
 
       const topic = args.trim();
@@ -844,7 +1351,10 @@ export default function (pi: ExtensionAPI) {
       // Create meeting folder structure
       await fsp.mkdir(path.join(absDir, "entries"), { recursive: true });
       assertDirectoryNoSymlink(absDir, "meeting directory");
-      assertDirectoryNoSymlink(path.join(absDir, "entries"), "entries directory");
+      assertDirectoryNoSymlink(
+        path.join(absDir, "entries"),
+        "entries directory"
+      );
 
       // Seed manifest
       const manifest: MeetingManifest = {
@@ -887,58 +1397,11 @@ export default function (pi: ExtensionAPI) {
       );
 
       // Send orchestration prompt to main agent
+      const promptText = buildDebatePrompt(topic, absDir, participants);
       pi.sendUserMessage([
         {
           type: "text" as const,
-          text: [
-            `⚔️ BLACKBOARD DEBATE: ${topic}`,
-            "",
-            `Meeting folder: \`${absDir}\``,
-            "",
-            "You are facilitating an OPEN-ENDED debate using the MEETING BLACKBOARD.",
-            "Each debater writes their FULL argument to disk via meeting_append_entry.",
-            "Continue until the debate CONVERGES or the user intervenes.",
-            "",
-            "## Debaters (cycling indefinitely)",
-            "- **GPT** (gpt-brainstormer): THE PROSECUTOR — Attack other positions ruthlessly. Find every logical flaw, hidden assumption, and missing edge case.",
-            "- **DeepSeek** (deepseek-brainstormer): THE SYSTEMS SKEPTIC — Dissect structural implications. What breaks at scale? Where are the hidden costs?",
-            "- **MiniMax** (minimax-brainstormer): THE CONTRARIAN — Take the opposite position. Expose groupthink. Propose radical alternatives.",
-            "",
-            "## CRITICAL INSTRUCTIONS",
-            "",
-            "### For subagents (include in EVERY task):",
-            "1. Write your FULL contribution using the meeting_append_entry tool with:",
-            `   - meetingDir: "${absDir}"`,
-            "   - speaker: your name (GPT, DeepSeek, or MiniMax)",
-            '   - phase: "Cycle 1", "Cycle 2", etc.',
-            "   - summary: a ONE-SENTENCE summary of your argument",
-            "   - content: your FULL argument in Chinese (中文)",
-            "2. After writing, your FINAL ANSWER must be ONLY:",
-            "   `WROTE_ENTRY: <your one-sentence summary>`",
-            "3. DO NOT paste your full argument into the chat.",
-            "",
-            "### Include the FULL VERBATIM prior debate record in each subagent task.",
-            "Use meeting_read_index and meeting_read_entry to retrieve the complete debate history.",
-            "NEVER summarize or truncate the debate record when passing to subagents.",
-            "",
-            "### For you, the facilitator:",
-            "- Do NOT paste participant full text into chat. They are on the blackboard.",
-            "- Run debaters in CHAIN mode (one at a time, each sees all prior entries).",
-            "- Read the index with meeting_read_index frequently.",
-            "- Read full entries with meeting_read_entry when synthesizing.",
-            "- After EACH full cycle (all 3 spoke), check for CONVERGENCE:",
-            "  * Do 2+ agents agree on a specific conclusion?",
-            "  * Did the last cycle introduce any NEW arguments?",
-            "  * Did anyone explicitly concede?",
-            "- If NOT converged: run another cycle. Keep going.",
-            "- If converged: present synthesis to me.",
-            "",
-            "## Rules",
-            "- NEVER stop at a predetermined count. Only convergence or user intervention ends this debate.",
-            "- All responses in Chinese (中文).",
-            "- After convergence, save transcript.md immediately and (after user confirms) conclusion.md per the MEETING OUTPUT PROTOCOL.",
-            "- Present: (1) the debate arc, (2) who conceded what, (3) final synthesis.",
-          ].join("\n"),
+          text: promptText,
         },
       ]);
     },
