@@ -1,16 +1,16 @@
 /**
- * meeting-blackboard — Blackboard-based brainstorm/debate extension for Pi
+ * pi-brainstorm — Multi-model brainstorm/debate extension for Pi
  *
- * Replaces in-chat passing of giant agent responses with a filesystem-based
- * blackboard. Subagents write their full contribution to disk via a tool,
- * and the main conversation only sees short entry notification cards.
+ * Runs brainstorm and battle-style debate sessions across multiple subagents.
+ * Full participant contributions are stored in a local filesystem blackboard,
+ * while the main conversation sees compact cards and facilitator synthesis.
  *
  * Features:
  * - meeting_append_entry tool — concurrency-safe append to meeting folder
  * - meeting_read_index tool — read meeting index
  * - meeting_read_entry tool — read full entry content
- * - /brainstorm2 command — blackboard-based brainstorming
- * - /debate2 command — blackboard-based open-ended debate
+ * - /brainstorm command — multi-model brainstorming
+ * - /debate command — open-ended multi-agent debate
  * - meeting-entry message renderer — compact cards with expandable content
  * - File watcher — auto-posts new entries into the main conversation
  */
@@ -697,14 +697,14 @@ export default function (pi: ExtensionAPI) {
     }
   );
 
-  // ── Command: /brainstorm2 ─────────────────────────────
+  // ── Command: /brainstorm ─────────────────────────────
 
-  pi.registerCommand("brainstorm2", {
+  pi.registerCommand("brainstorm", {
     description:
-      "Start a blackboard-based multi-model brainstorming session on a topic",
+      "Start a multi-model brainstorming session on a topic",
     handler: async (args, ctx) => {
       if (!args || !args.trim()) {
-        ctx.ui.notify("Usage: /brainstorm2 <topic>", "warning");
+        ctx.ui.notify("Usage: /brainstorm <topic>", "warning");
         return;
       }
 
@@ -758,7 +758,7 @@ export default function (pi: ExtensionAPI) {
       startWatching(pi, absDir);
 
       ctx.ui.notify(
-        `🧠 Blackboard meeting: ${meetingName}\n` +
+        `🧠 Multi-model brainstorm: ${meetingName}\n` +
           `  Folder: .pi-meetings/${meetingName}/\n` +
           `  Watcher active — entries will appear as cards`,
         "info"
@@ -818,14 +818,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── Command: /debate2 ─────────────────────────────────
+  // ── Command: /debate ─────────────────────────────────
 
-  pi.registerCommand("debate2", {
+  pi.registerCommand("debate", {
     description:
-      "Start a blackboard-based open-ended multi-agent debate — runs until convergence",
+      "Start a multi-agent debate battle — runs until convergence",
     handler: async (args, ctx) => {
       if (!args || !args.trim()) {
-        ctx.ui.notify("Usage: /debate2 <topic>", "warning");
+        ctx.ui.notify("Usage: /debate <topic>", "warning");
         return;
       }
 
@@ -879,7 +879,7 @@ export default function (pi: ExtensionAPI) {
       startWatching(pi, absDir);
 
       ctx.ui.notify(
-        `⚔️ Blackboard debate: ${meetingName}\n` +
+        `⚔️ Multi-agent debate: ${meetingName}\n` +
           `  Folder: .pi-meetings/${meetingName}/\n` +
           `  Watcher active — entries will appear as cards\n` +
           `  Open-ended — runs until convergence or you intervene`,

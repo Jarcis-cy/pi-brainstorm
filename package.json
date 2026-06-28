@@ -1,27 +1,29 @@
 {
-  "name": "pi-meeting-blackboard",
-  "version": "0.1.1",
-  "description": "Blackboard-based brainstorm and debate meetings for pi subagents.",
+  "name": "pi-brainstorm",
+  "version": "0.2.0",
+  "description": "Multi-model brainstorming and debate sessions for pi subagents.",
   "type": "module",
   "keywords": [
     "pi-package",
     "pi",
     "pi-extension",
-    "blackboard",
     "brainstorm",
     "debate",
-    "subagents"
+    "battle",
+    "multi-model",
+    "subagents",
+    "blackboard"
   ],
   "author": "Jarcis-cy",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jarcis-cy/pi-meeting-blackboard.git"
+    "url": "git+https://github.com/Jarcis-cy/pi-brainstorm.git"
   },
   "bugs": {
-    "url": "https://github.com/Jarcis-cy/pi-meeting-blackboard/issues"
+    "url": "https://github.com/Jarcis-cy/pi-brainstorm/issues"
   },
-  "homepage": "https://github.com/Jarcis-cy/pi-meeting-blackboard#readme",
+  "homepage": "https://github.com/Jarcis-cy/pi-brainstorm#readme",
   "files": [
     "extensions",
     "README.md",
