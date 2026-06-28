@@ -30,7 +30,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.3.0
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.3.1
 ```
 
 本地开发安装：
@@ -94,7 +94,7 @@ participants:
 /debate <主题>
 ```
 
-`/brainstorm` 启动三轮多模型头脑风暴。
+`/brainstorm` 启动交互式三轮多模型头脑风暴。Round 1 和 Round 2 结束后，主持人应停止、总结本轮，并等待你的反馈或继续许可，再进入下一轮。
 
 `/debate` 启动开放式多 Agent battle，直到收敛或用户介入为止。
 
@@ -104,7 +104,7 @@ participants:
 参与者模型 -> meeting_append_entry -> .pi-meetings/... 文件
 参与者模型 -> 短 WROTE_ENTRY 摘要 -> 主持人上下文
 文件 watcher -> 短卡片 -> 主会话可见区域
-主持人 -> 共识 / 分歧 / 最终综合
+主持人 -> 每轮 checkpoint / 共识 / 分歧 / 最终综合
 ```
 
 黑板文件是会话事实源。主持人可以按需读取索引或具体条目，然后生成结构化总结。
