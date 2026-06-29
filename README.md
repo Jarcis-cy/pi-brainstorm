@@ -21,7 +21,13 @@ The plugin stores each participant's full contribution in a local meeting blackb
 
 ## Install
 
-From npm:
+Recommended one-line install:
+
+```bash
+pi install npm:@narumitw/pi-subagents && pi install npm:pi-brainstorm
+```
+
+Install only this package from npm:
 
 ```bash
 pi install npm:pi-brainstorm
@@ -30,7 +36,7 @@ pi install npm:pi-brainstorm
 From GitHub:
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.0
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.1
 ```
 
 For local development:
@@ -56,6 +62,8 @@ For reference, Pi's coding-agent distribution also includes an example implement
 ```
 
 `pi-brainstorm` also needs participant agents such as `gpt-brainstormer`, `deepseek-brainstormer`, `minimax-brainstormer`, and `glm-brainstormer`. On first use, the extension can create or update managed user-level agent files from its YAML configuration. Existing unmanaged agent files are left untouched.
+
+`@narumitw/pi-subagents` applies a hard subprocess timeout. If `timeoutMs` is not set, it uses `PI_SUBAGENT_TIMEOUT_MS`, or `600000` milliseconds (10 minutes) when that environment variable is unset. Long participant output is not itself a timeout condition, but generating very long output can take longer and may hit that wall-clock timeout. Participant full text is written to `.pi-meetings/...`; the main chat should only receive short `WROTE_ENTRY` summaries and facilitator synthesis.
 
 ## Configuration
 

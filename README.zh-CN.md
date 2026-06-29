@@ -21,7 +21,13 @@ English README: [README.md](./README.md).
 
 ## 安装
 
-通过 npm 安装：
+推荐一行安装：
+
+```bash
+pi install npm:@narumitw/pi-subagents && pi install npm:pi-brainstorm
+```
+
+只安装本包：
 
 ```bash
 pi install npm:pi-brainstorm
@@ -30,7 +36,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.0
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.1
 ```
 
 本地开发安装：
@@ -100,6 +106,8 @@ pi install npm:@narumitw/pi-subagents
 命令处理器会先创建本地会议记录，然后让主 Agent 通过 `subagent` 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`、`glm-brainstormer`）。
 
 第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否写入内置默认定义。已有同名且不含托管标记的文件不会被覆盖。
+
+`@narumitw/pi-subagents` 对每个子进程有 hard timeout。未设置 `timeoutMs` 时，会使用环境变量 `PI_SUBAGENT_TIMEOUT_MS`；如果环境变量也没设置，默认是 `600000` 毫秒（10 分钟）。子 agent 输出很长本身不会被判定为 timeout，但生成超长输出会增加运行时间，如果超过这个 wall-clock timeout，就会被 `subagent` 工具标记为超时。参与者全文应写入 `.pi-meetings/...`，主会话只应看到短的 `WROTE_ENTRY` 摘要和主持人综合。
 
 ## 命令
 
