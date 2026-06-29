@@ -10,7 +10,7 @@ English README: [README.md](./README.md).
 
 ## 功能
 
-- 多模型头脑风暴：参与者可配置（默认：GPT、DeepSeek、MiniMax）。
+- 多模型头脑风暴：参与者可配置（默认：GPT、DeepSeek、MiniMax、GLM）。
 - 辩论 / battle 模式：Agent 会攻击、审视、反驳彼此的观点。
 - 配置驱动：通过 YAML 添加、删除或自定义参与者。
 - 每轮输出聚焦共识、分歧、关键问题和下一步方向。
@@ -30,7 +30,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.3.1
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.0
 ```
 
 本地开发安装：
@@ -83,7 +83,7 @@ participants:
 
 ## 前置条件
 
-该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建本地会议记录，然后让主 Agent 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`）。
+该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建本地会议记录，然后让主 Agent 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`、`glm-brainstormer`）。
 
 第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否写入内置默认定义。已有同名且不含托管标记的文件不会被覆盖。
 

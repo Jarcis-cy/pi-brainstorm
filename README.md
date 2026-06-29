@@ -10,7 +10,7 @@ The plugin stores each participant's full contribution in a local meeting blackb
 
 ## Features
 
-- Multi-model brainstorming with configurable participants (default: GPT, DeepSeek, MiniMax).
+- Multi-model brainstorming with configurable participants (default: GPT, DeepSeek, MiniMax, GLM).
 - Debate / battle mode where agents prosecute, stress-test, and challenge positions.
 - Configuration-driven: add, remove, or customize participants via YAML.
 - Round-by-round summaries focused on consensus, disagreement, and next questions.
@@ -30,7 +30,7 @@ pi install npm:pi-brainstorm
 From GitHub:
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.3.1
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.0
 ```
 
 For local development:
