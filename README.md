@@ -39,6 +39,24 @@ For local development:
 pi install /Users/jarcis/Project/pi-brainstorm
 ```
 
+## Prerequisites
+
+`pi-brainstorm` orchestrates participants through Pi's `subagent` tool. Install the `subagent` tool separately before using `/brainstorm` or `/debate`:
+
+```bash
+pi install npm:@narumitw/pi-subagents
+```
+
+`@narumitw/pi-subagents` registers the `subagent` tool used by this package to run participant agents in isolated Pi subprocesses. It is a runtime prerequisite, not bundled inside `pi-brainstorm`.
+
+For reference, Pi's coding-agent distribution also includes an example implementation at:
+
+```text
+/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/
+```
+
+`pi-brainstorm` also needs participant agents such as `gpt-brainstormer`, `deepseek-brainstormer`, `minimax-brainstormer`, and `glm-brainstormer`. On first use, the extension can create or update managed user-level agent files from its YAML configuration. Existing unmanaged agent files are left untouched.
+
 ## Configuration
 
 Participants are defined in YAML. The extension loads config in this order (later overrides earlier):

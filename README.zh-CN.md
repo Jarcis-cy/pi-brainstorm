@@ -83,7 +83,21 @@ participants:
 
 ## 前置条件
 
-该扩展依赖 pi 中已有的 `subagent` 工具。命令处理器会先创建本地会议记录，然后让主 Agent 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`、`glm-brainstormer`）。
+`pi-brainstorm` 通过 Pi 的 `subagent` 工具来调用各个参与者。使用 `/brainstorm` 或 `/debate` 前，请先单独安装提供 `subagent` 工具的包：
+
+```bash
+pi install npm:@narumitw/pi-subagents
+```
+
+`@narumitw/pi-subagents` 会注册 `subagent` 工具，让 `pi-brainstorm` 能把参与者作为隔离的 Pi 子进程运行。它是运行时前置条件，不随 `pi-brainstorm` 打包。
+
+作为参考，Pi coding-agent 发行包中也包含一个 example implementation，通常位于：
+
+```text
+/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/
+```
+
+命令处理器会先创建本地会议记录，然后让主 Agent 通过 `subagent` 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`、`glm-brainstormer`）。
 
 第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否写入内置默认定义。已有同名且不含托管标记的文件不会被覆盖。
 
