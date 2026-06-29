@@ -301,13 +301,14 @@ function generateAgentFile(participant: ParticipantConfig): string {
     : `- 参与多模型讨论并提供${participant.displayName}视角的分析`;
 
   return [
-    MANAGED_MARKER,
     "---",
     `name: ${yamlScalar(participant.agentName)}`,
     `description: ${yamlScalar(description)}`,
     `tools: ${toolsStr}`,
     `model: ${yamlScalar(participant.model)}`,
     "---",
+    "",
+    MANAGED_MARKER,
     "",
     `# ${participant.displayName} Brainstormer${roleTitle}`,
     "",

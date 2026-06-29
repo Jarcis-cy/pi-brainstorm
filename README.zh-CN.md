@@ -36,7 +36,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.1
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.2
 ```
 
 本地开发安装：
