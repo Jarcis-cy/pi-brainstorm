@@ -36,7 +36,7 @@ pi install npm:pi-brainstorm
 通过 GitHub 安装：
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.2
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.3
 ```
 
 本地开发安装：
@@ -133,8 +133,9 @@ pi install npm:@narumitw/pi-subagents
 
 ## 工具
 
-扩展注册三个工具：
+扩展注册四个工具：
 
+- `meeting_rename`（仅主持人）：在 Round 1 开始前将会议目录重命名为人类可读的标题。
 - `meeting_append_entry`：把参与者完整发言写入磁盘，只返回短引用。
 - `meeting_read_index`：读取条目索引，包含 id、speaker、phase、summary、path。
 - `meeting_read_entry`：在主持人或参与者需要时读取某条完整发言。

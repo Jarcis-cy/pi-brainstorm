@@ -36,7 +36,7 @@ pi install npm:pi-brainstorm
 From GitHub:
 
 ```bash
-pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.2
+pi install git:github.com/Jarcis-cy/pi-brainstorm@v0.4.3
 ```
 
 For local development:
@@ -131,8 +131,9 @@ The blackboard files are the source of truth for the session. The facilitator ca
 
 ## Tools
 
-The extension registers three tools for participants and the facilitator:
+The extension registers four tools:
 
+- `meeting_rename` (facilitator-only) renames the meeting directory to a human-readable title before Round 1 starts.
 - `meeting_append_entry` writes a full participant contribution to disk and returns only a short reference.
 - `meeting_read_index` lists entries by id, speaker, phase, summary, and path.
 - `meeting_read_entry` reads one full entry when the facilitator or a participant needs it.

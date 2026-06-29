@@ -59,14 +59,17 @@ interface BrainstormConfig {
 // ────────────────────────────────────────────────────────
 
 const MANAGED_MARKER = "<!-- managed-by: pi-brainstorm -->";
+const MEETING_TOOLS = [
+  "meeting_append_entry",
+  "meeting_read_index",
+  "meeting_read_entry",
+];
 const DEFAULT_TOOLS = [
   "read",
   "grep",
   "find",
   "ls",
-  "meeting_append_entry",
-  "meeting_read_index",
-  "meeting_read_entry",
+  ...MEETING_TOOLS,
 ];
 
 // ────────────────────────────────────────────────────────
@@ -283,9 +286,15 @@ function yamlScalar(value: string): string {
 }
 
 function generateAgentFile(participant: ParticipantConfig): string {
-  const tools = participant.tools && participant.tools.length > 0
+  const baseTools = participant.tools && participant.tools.length > 0
     ? participant.tools
     : DEFAULT_TOOLS;
+  // Always include meeting tools even when participant overrides defaults
+  const toolsSet = new Set(baseTools);
+  for (const mt of MEETING_TOOLS) {
+    toolsSet.add(mt);
+  }
+  const tools = [...toolsSet];
   const toolsStr = tools.join(", ");
 
   const description =
@@ -508,7 +517,7 @@ function buildBrainstormPrompt(
   return [
     `BLACKBOARD BRAINSTORMING SESSION: ${topic}`,
     "",
-    `Meeting folder: \`${absDir}\``,
+    `Initial meeting folder: \`${absDir}\``,
     "",
     "You are facilitating a round-robin brainstorming session using the MEETING BLACKBOARD.",
     "Each consultant writes their FULL contribution to disk via meeting_append_entry.",
@@ -516,34 +525,52 @@ function buildBrainstormPrompt(
     "## Consultants (3 rounds)",
     consultantLines,
     "",
+    "## PRE-ROUND STEP — Assign a Human-Readable Title",
+    "",
+    `Before Round 1, choose a concise human-readable meeting title for "${topic}" and call:`,
+    `  meeting_rename({ meetingDir: "${absDir}", title: "<your concise title>" })`,
+    "",
+    "Use the returned `newMeetingDir` for ALL subsequent meeting tools and subagent tasks. If rename fails, continue with the original meetingDir.",
+    "",
     "## CRITICAL INSTRUCTIONS",
     "",
+    "### Blackboard-first — do NOT paste prior participant text into subagent tasks",
+    "",
+    "The meeting blackboard is the single source of truth. Subagent tasks must direct participants to READ from the blackboard, not receive pasted history.",
+    "",
+    "- Round 1: subagents write initial analysis. No prior entries to read.",
+    "- Round 2: tell subagents to call meeting_read_index and meeting_read_entry on the current meetingDir to read Round 1 entries before responding.",
+    "- Round 3: tell subagents to call meeting_read_index and meeting_read_entry to read ALL prior round entries AND any User feedback entries from the blackboard.",
+    "- User feedback: if the user provides feedback that exists only in chat, APPEND it to the blackboard as `speaker: \"User\", phase: \"Feedback after Round N\"`, then tell participants to read it from the blackboard.",
+    "",
     "### For subagents (include in EVERY task):",
-    "1. Write your FULL contribution using the meeting_append_entry tool with:",
-    `   - meetingDir: "${absDir}"`,
+    "1. When the task asks for prior context, read it from the blackboard using meeting_read_index and meeting_read_entry. Round 1 has no prior entries to read.",
+    "2. Write your FULL contribution using the meeting_append_entry tool with:",
+    `   - meetingDir: the current meetingDir (use the one returned by meeting_rename if rename succeeded)`,
     "   - speaker: your display name, e.g.:",
     agentTaskLines,
     '   - phase: "Round 1", "Round 2", or "Round 3"',
     "   - summary: a ONE-SENTENCE summary of your contribution",
     "   - content: your FULL analysis in Chinese (中文)",
     "   - content must contain only the participant's analysis. Do not include wrapper tags, hidden thinking markers, tool-call text, or WROTE_ENTRY text inside content.",
-    "2. After writing, your FINAL ANSWER must be ONLY:",
+    "3. After writing, your FINAL ANSWER must be ONLY:",
     "   `WROTE_ENTRY: <your one-sentence summary>`",
-    "3. DO NOT paste your full analysis into the chat. The main agent and user will read it from the blackboard.",
+    "4. DO NOT paste your full analysis into the chat. The main agent and user will read it from the blackboard.",
     "",
     "### For you, the facilitator:",
     "- Do NOT paste participant full text into chat. They are on the blackboard.",
+    "- Do NOT paste prior round content into subagent tasks. Tell subagents to read the blackboard.",
     "- After each round, read the index with meeting_read_index and present a structural overview.",
     "- Optionally read full entries with meeting_read_entry when needed.",
     "- Present each consultant's summary + your structural overview (conflict matrix, consensus table).",
-    "- When the user gives feedback, relay it VERBATIM to the consultants in the next round.",
+    "- When the user gives feedback, append it to the blackboard as a User entry, then tell participants to read it.",
     "",
     "## Protocol",
-    "Round 1: Each consultant gives initial analysis on the topic. Run all in parallel.",
+    "Round 1: Each consultant gives initial analysis on the topic. Run all in parallel. Subagents do not need to read prior entries.",
     "After Round 1: read the index, present summaries plus a structural overview, then STOP. Ask the user for feedback or permission to continue. Do NOT start Round 2 in the same assistant turn.",
-    "Round 2: only after the user replies, feed Round 1 plus the user's VERBATIM feedback back to each consultant. Ask each to challenge the others and propose improvements.",
+    "Round 2: only after the user replies, tell each subagent to call meeting_read_index and meeting_read_entry to read Round 1 entries, then challenge the others and propose improvements. If user feedback exists, append it to the blackboard first.",
     "After Round 2: read the index, present summaries plus an updated structural overview, then STOP. Ask the user for feedback or permission to continue. Do NOT start Round 3 in the same assistant turn.",
-    "Round 3: only after the user replies, feed all prior rounds plus the user's VERBATIM feedback back to each consultant. Each gives FINAL recommendation, synthesizing the best ideas.",
+    "Round 3: only after the user replies, tell each subagent to read ALL prior round entries AND user feedback entries from the blackboard (via meeting_read_index and meeting_read_entry). Each gives FINAL recommendation, synthesizing the best ideas.",
     "",
     "After Round 3, present the complete structural overview and ask whether to write the final conclusion. Only write conclusion.md after the user confirms.",
     "",
@@ -623,7 +650,7 @@ function buildDebatePrompt(
   return [
     `⚔️ BLACKBOARD DEBATE: ${topic}`,
     "",
-    `Meeting folder: \`${absDir}\``,
+    `Initial meeting folder: \`${absDir}\``,
     "",
     "You are facilitating an OPEN-ENDED debate using the MEETING BLACKBOARD.",
     "Each debater writes their FULL argument to disk via meeting_append_entry.",
@@ -635,26 +662,39 @@ function buildDebatePrompt(
     "## DEBATE PERSONAS (include in each subagent task)",
     taskPrefixLines,
     "",
+    "## PRE-ROUND STEP — Assign a Human-Readable Title",
+    "",
+    `Before Cycle 1, choose a concise human-readable meeting title for "${topic}" and call:`,
+    `  meeting_rename({ meetingDir: "${absDir}", title: "<your concise title>" })`,
+    "",
+    "Use the returned `newMeetingDir` for ALL subsequent meeting tools and subagent tasks. If rename fails, continue with the original meetingDir.",
+    "",
     "## CRITICAL INSTRUCTIONS",
     "",
+    "### Blackboard-first — do NOT paste prior participant text into subagent tasks",
+    "",
+    "The meeting blackboard is the single source of truth. Subagent tasks must direct participants to READ from the blackboard, not receive pasted history.",
+    "",
+    "- Each subagent must call meeting_read_index and meeting_read_entry on the current meetingDir to read the complete debate history before writing.",
+    "- NEVER summarize or truncate the debate record when passing to subagents — tell them to read it from the blackboard.",
+    "- If the user provides feedback in chat, APPEND it to the blackboard as `speaker: \"User\", phase: \"Feedback\"`, then tell debaters to read it.",
+    "",
     "### For subagents (include in EVERY task):",
-    "1. Write your FULL contribution using the meeting_append_entry tool with:",
-    `   - meetingDir: "${absDir}"`,
+    "1. First, read the complete debate history from the blackboard using meeting_read_index and meeting_read_entry.",
+    "2. Write your FULL contribution using the meeting_append_entry tool with:",
+    `   - meetingDir: the current meetingDir (use the one returned by meeting_rename if rename succeeded)`,
     "   - speaker: your display name, e.g.:",
     agentTaskLines,
     '   - phase: "Cycle 1", "Cycle 2", etc.',
     "   - summary: a ONE-SENTENCE summary of your argument",
     "   - content: your FULL argument in Chinese (中文)",
-    "2. After writing, your FINAL ANSWER must be ONLY:",
+    "3. After writing, your FINAL ANSWER must be ONLY:",
     "   `WROTE_ENTRY: <your one-sentence summary>`",
-    "3. DO NOT paste your full argument into the chat.",
-    "",
-    "### Include the FULL VERBATIM prior debate record in each subagent task.",
-    "Use meeting_read_index and meeting_read_entry to retrieve the complete debate history.",
-    "NEVER summarize or truncate the debate record when passing to subagents.",
+    "4. DO NOT paste your full argument into the chat.",
     "",
     "### For you, the facilitator:",
     "- Do NOT paste participant full text into chat. They are on the blackboard.",
+    "- Do NOT paste prior debate history into subagent tasks. Tell subagents to read the blackboard.",
     "- Cycle through debaters in sequence (chain mode) so each sees all prior entries.",
     "- Read the index with meeting_read_index frequently.",
     "- Read full entries with meeting_read_entry when synthesizing.",
@@ -718,11 +758,6 @@ function sanitizeFilenamePart(raw: string): string {
       .slice(0, 60)
       .toLowerCase() || "unknown"
   );
-}
-
-/** Convert a topic string to a filesystem-safe slug. */
-function topicToSlug(topic: string): string {
-  return sanitizeFilenamePart(topic).slice(0, 40);
 }
 
 /** Format today's date as YYYY-MM-DD. */
@@ -804,6 +839,136 @@ function readEntrySummary(absPath: string): string {
   } catch {
     return path.basename(absPath, ".md");
   }
+}
+
+/** Strip CR/LF/control chars, collapse whitespace, trim, max ~80 chars. */
+function sanitizeHumanTitle(raw: string): string {
+  return (
+    raw
+      .replace(/[\r\n\x00-\x1f\x7f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "Untitled meeting"
+  );
+}
+
+/** Return current time as HHMMSS. */
+function timeStr(): string {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}${mm}${ss}`;
+}
+
+/** Generate initial meeting name for a kind. */
+function initialMeetingName(kind: "brainstorm" | "debate"): string {
+  return `${todayStr()}-${kind}-${timeStr()}`;
+}
+
+/**
+ * Create a unique meeting directory under cwd/.pi-meetings/.
+ * Tries baseName, then baseName-2 through baseName-50.
+ * Returns the absolute directory and the actual meeting name used.
+ */
+async function createUniqueMeetingDir(
+  cwd: string,
+  baseName: string
+): Promise<{ absDir: string; meetingName: string }> {
+  const meetingsRoot = path.resolve(cwd, ".pi-meetings");
+
+  // validateMeetingDir ensures root exists
+  const candidates: string[] = [baseName];
+  for (let suffix = 2; suffix <= 50; suffix++) {
+    candidates.push(`${baseName}-${suffix}`);
+  }
+
+  for (const candidate of candidates) {
+    const absDir = path.resolve(cwd, ".pi-meetings", candidate);
+    // Validate resolves & ensures root
+    validateMeetingDir(absDir, cwd);
+    if (!fs.existsSync(absDir)) {
+      await fsp.mkdir(absDir);
+      assertDirectoryNoSymlink(absDir, "meeting directory");
+      const entriesDir = path.join(absDir, "entries");
+      await fsp.mkdir(entriesDir);
+      assertDirectoryNoSymlink(entriesDir, "entries directory");
+      return { absDir, meetingName: candidate };
+    }
+  }
+
+  throw new Error(
+    `Could not create unique meeting directory under .pi-meetings/ for base name "${baseName}". Tried up to ${baseName}-50.`
+  );
+}
+
+/** Check whether a meeting already has entries. */
+async function meetingHasEntries(absDir: string): Promise<boolean> {
+  const manifest = await readManifest(absDir);
+  if (manifest && manifest.entryCount > 0) return true;
+
+  const count = await getEntryCount(absDir);
+  if (count > 0) return true;
+
+  const entriesDir = path.join(absDir, "entries");
+  if (fs.existsSync(entriesDir)) {
+    try {
+      const files = await fsp.readdir(entriesDir);
+      if (files.some((f) => f.endsWith(".md"))) return true;
+    } catch {
+      // ignore
+    }
+  }
+
+  return false;
+}
+
+/** Replace the first markdown heading in blackboard.md, preserving Meeting/Debate prefix. */
+function replaceBlackboardHeading(absDir: string, title: string): void {
+  const blackboardPath = path.join(absDir, "blackboard.md");
+  assertWritableFilePath(blackboardPath, absDir, "meeting blackboard");
+
+  let content = fs.readFileSync(blackboardPath, "utf-8");
+  content = content.replace(
+    /^# (Meeting|Debate): .*$/m,
+    `# $1: ${title}`
+  );
+  fs.writeFileSync(blackboardPath, content, "utf-8");
+}
+
+/**
+ * Move all direct children from oldAbsDir into a newly-created targetAbsDir,
+ * then remove oldAbsDir. Rejects if target already exists. Rejects symlinks
+ * among old dir's direct children.
+ */
+async function moveMeetingDirectoryNoOverwrite(
+  oldAbsDir: string,
+  targetAbsDir: string
+): Promise<void> {
+  if (fs.existsSync(targetAbsDir)) {
+    throw new Error(`Target directory already exists: ${targetAbsDir}`);
+  }
+
+  const children = await fsp.readdir(oldAbsDir, { withFileTypes: true });
+  for (const child of children) {
+    if (child.isSymbolicLink()) {
+      throw new Error(
+        `Symlink detected in meeting directory: ${path.join(oldAbsDir, child.name)}`
+      );
+    }
+  }
+
+  await fsp.mkdir(targetAbsDir);
+  assertDirectoryNoSymlink(targetAbsDir, "target meeting directory");
+
+  for (const child of children) {
+    await fsp.rename(
+      path.join(oldAbsDir, child.name),
+      path.join(targetAbsDir, child.name)
+    );
+  }
+
+  await fsp.rmdir(oldAbsDir);
 }
 
 // ────────────────────────────────────────────────────────
@@ -903,6 +1068,7 @@ function stopWatching(meetingDir: string): void {
 
 interface MeetingManifest {
   topic: string;
+  title?: string;
   created: string;
   lastUpdate: string;
   entryCount: number;
@@ -945,6 +1111,139 @@ async function getEntryCount(absDir: string): Promise<number> {
 // ────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  // ── Tool: meeting_rename ─────────────────────────────
+
+  pi.registerTool({
+    name: "meeting_rename",
+    label: "Meeting Rename",
+    description:
+      "Rename a meeting directory to a human-readable title. Facilitator-only. " +
+      "Only works when the meeting has no entries yet (before Round 1 starts).",
+    promptSnippet:
+      "meeting_rename({ meetingDir, title }) — rename meeting to human-readable title",
+    parameters: Type.Object({
+      meetingDir: Type.String({
+        description: "Absolute path to the current meeting directory",
+      }),
+      title: Type.String({
+        description: "Human-readable meeting title (max ~80 chars)",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const cwd = ctx.cwd;
+      const oldAbsDir = validateMeetingDir(params.meetingDir, cwd);
+
+      const manifestPath = path.join(oldAbsDir, "manifest.json");
+      assertWritableFilePath(manifestPath, oldAbsDir, "manifest");
+
+      return withFileMutationQueue(manifestPath, async () => {
+        // Reject if meeting already has entries
+        const hasEntries = await meetingHasEntries(oldAbsDir);
+        if (hasEntries) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Cannot rename meeting: entries already exist. meeting_rename only works on empty meetings (before Round 1 starts).",
+              },
+            ],
+            details: {},
+            isError: true,
+          };
+        }
+
+        // Sanitize title
+        const sanitizedTitle = sanitizeHumanTitle(params.title);
+
+        // Derive date prefix from old basename
+        const oldBase = path.basename(oldAbsDir);
+        const dateMatch = oldBase.match(/^\d{4}-\d{2}-\d{2}/);
+        const datePrefix = dateMatch ? dateMatch[0] : todayStr();
+
+        // Build target base name
+        const titleSlug = sanitizeFilenamePart(sanitizedTitle).slice(0, 40);
+        const baseTarget = `${datePrefix}-${titleSlug}`;
+
+        // Find a non-existing suffix
+        let targetMeetingName = baseTarget;
+        let targetAbsDir = path.resolve(cwd, ".pi-meetings", targetMeetingName);
+
+        if (fs.existsSync(targetAbsDir)) {
+          let found = false;
+          for (let suffix = 2; suffix <= 50; suffix++) {
+            const candidate = `${baseTarget}-${suffix}`;
+            const candidateAbsDir = path.resolve(cwd, ".pi-meetings", candidate);
+            if (!fs.existsSync(candidateAbsDir)) {
+              targetMeetingName = candidate;
+              targetAbsDir = candidateAbsDir;
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Cannot rename meeting: no available target name under .pi-meetings/. Tried ${baseTarget} through ${baseTarget}-50.`,
+                },
+              ],
+              details: {},
+              isError: true,
+            };
+          }
+        }
+
+        // Validate target
+        validateMeetingDir(targetAbsDir, cwd);
+
+        // Stop watching old dir
+        stopWatching(oldAbsDir);
+
+        try {
+          await moveMeetingDirectoryNoOverwrite(oldAbsDir, targetAbsDir);
+        } catch (err: any) {
+          // Restart watcher on old dir on failure
+          startWatching(pi, oldAbsDir);
+          throw err;
+        }
+
+        try {
+          // Update manifest with new title
+          const manifest = await readManifest(targetAbsDir);
+          if (manifest) {
+            manifest.title = sanitizedTitle;
+            manifest.lastUpdate = new Date().toISOString();
+            await writeManifest(targetAbsDir, manifest);
+          }
+
+          // Replace blackboard heading
+          replaceBlackboardHeading(targetAbsDir, sanitizedTitle);
+        } catch (err) {
+          startWatching(pi, targetAbsDir);
+          throw err;
+        }
+
+        // Start watching new dir
+        startWatching(pi, targetAbsDir);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Meeting renamed. New meetingDir: ${targetAbsDir}`,
+            },
+          ],
+          details: {
+            oldMeetingDir: oldAbsDir,
+            newMeetingDir: targetAbsDir,
+            title: sanitizedTitle,
+          },
+        };
+      });
+    },
+  });
+
   // ── Tool: meeting_append_entry ─────────────────────────
 
   pi.registerTool({
@@ -1310,16 +1609,19 @@ export default function (pi: ExtensionAPI) {
       if (!agentsReady) return;
 
       const topic = args.trim();
-      const slug = topicToSlug(topic);
-      const dateStr = todayStr();
-      const meetingName = `${dateStr}-${slug}`;
-      const absDir = validateMeetingDir(
-        path.resolve(ctx.cwd, ".pi-meetings", meetingName),
-        ctx.cwd
-      );
+      let absDir: string;
+      let meetingName: string;
+      try {
+        ({ absDir, meetingName } = await createUniqueMeetingDir(
+          ctx.cwd,
+          initialMeetingName("brainstorm")
+        ));
+      } catch (err: any) {
+        ctx.ui.notify(`Failed to create meeting folder: ${err.message}`, "error");
+        return;
+      }
 
-      // Create meeting folder structure
-      await fsp.mkdir(path.join(absDir, "entries"), { recursive: true });
+      // Assertions (createUniqueMeetingDir already created dir + entries)
       assertDirectoryNoSymlink(absDir, "meeting directory");
       assertDirectoryNoSymlink(
         path.join(absDir, "entries"),
@@ -1405,16 +1707,19 @@ export default function (pi: ExtensionAPI) {
       if (!agentsReady) return;
 
       const topic = args.trim();
-      const slug = topicToSlug(topic);
-      const dateStr = todayStr();
-      const meetingName = `${dateStr}-${slug}`;
-      const absDir = validateMeetingDir(
-        path.resolve(ctx.cwd, ".pi-meetings", meetingName),
-        ctx.cwd
-      );
+      let absDir: string;
+      let meetingName: string;
+      try {
+        ({ absDir, meetingName } = await createUniqueMeetingDir(
+          ctx.cwd,
+          initialMeetingName("debate")
+        ));
+      } catch (err: any) {
+        ctx.ui.notify(`Failed to create meeting folder: ${err.message}`, "error");
+        return;
+      }
 
-      // Create meeting folder structure
-      await fsp.mkdir(path.join(absDir, "entries"), { recursive: true });
+      // Assertions (createUniqueMeetingDir already created dir + entries)
       assertDirectoryNoSymlink(absDir, "meeting directory");
       assertDirectoryNoSymlink(
         path.join(absDir, "entries"),
