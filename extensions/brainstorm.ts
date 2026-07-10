@@ -54,6 +54,160 @@ interface BrainstormConfig {
   participants: ParticipantConfig[];
 }
 
+
+// ────────────────────────────────────────────────────────
+// Lab Mode Types (v2 Artifact System)
+// ────────────────────────────────────────────────────────
+
+interface ArtifactSourceRef {
+  entryId: string;
+  entryPath: string;
+  sourceQuote: string;
+}
+
+type ArtifactStatus = "active" | "resolved" | "superseded" | "invalidated";
+type EvidenceLevel = "strong" | "moderate" | "weak" | "none";
+
+interface ClaimArtifact {
+  type: "claim";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  confidence: "high" | "medium" | "low";
+  evidenceLevel: EvidenceLevel;
+  evidenceDebt: boolean;
+  acceptedBy: string[];
+  challengedBy: string[];
+}
+
+interface QuestionArtifact {
+  type: "question";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  raisedBy: string;
+  addressedBy: string[];
+  resolution?: string;
+}
+
+interface RiskArtifact {
+  type: "risk";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  severity: "critical" | "high" | "medium" | "low";
+  likelihood: "certain" | "likely" | "possible" | "unlikely";
+  mitigation?: string;
+}
+
+interface EvidenceArtifact {
+  type: "evidence";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  strength: EvidenceLevel;
+  supports: string[];
+  opposes: string[];
+}
+
+interface DecisionArtifact {
+  type: "decision";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  rationale: string;
+  blockedBy: string[];
+  dependsOn: string[];
+  consensus: boolean;
+}
+
+interface ActionArtifact {
+  type: "action";
+  id: string;
+  timestamp: string;
+  source: ArtifactSourceRef;
+  status: ArtifactStatus;
+  content: string;
+  assignee: string;
+  deadline?: string;
+  priority: "must" | "should" | "could";
+}
+
+type Artifact =
+  | ClaimArtifact
+  | QuestionArtifact
+  | RiskArtifact
+  | EvidenceArtifact
+  | DecisionArtifact
+  | ActionArtifact;
+
+type EdgeType = "supports" | "opposes" | "duplicates" | "blocks" | "resolves" | "supersedes";
+
+interface Edge {
+  id: string;
+  from: string;
+  to: string;
+  type: EdgeType;
+  creator: string;
+  basis: string;
+  status: "active" | "invalidated";
+  timestamp: string;
+}
+
+type SessionPhase =
+  | "briefing"
+  | "diverge"
+  | "challenge"
+  | "evidence_check"
+  | "converge"
+  | "conclusion"
+  | "archived";
+
+interface MeetingState {
+  meetingDir: string;
+  topic: string;
+  phase: SessionPhase;
+  round: number;
+  participants: string[];
+  openQuestions: string[];
+  activeConflicts: string[];
+  acceptedDecisions: string[];
+  pendingActions: string[];
+  nextStep: string;
+  lastUpdated: string;
+  controllerReasoning?: string;
+}
+
+type EventType =
+  | "facilitator_decision"
+  | "user_feedback"
+  | "participant_entry"
+  | "artifact_generated"
+  | "edge_created"
+  | "state_transition"
+  | "digest_generated"
+  | "error"
+  | "retry";
+
+interface MeetingEvent {
+  id: string;
+  type: EventType;
+  timestamp: string;
+  agent?: string;
+  summary: string;
+  details: Record<string, unknown>;
+}
+
 // ────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────
@@ -755,6 +909,162 @@ function buildDebatePrompt(
 }
 
 
+/**
+ * Build the facilitator prompt for /brainstorm-lab (v2).
+ */
+function buildBrainstormLabPrompt(
+  topic: string,
+  absDir: string,
+  participants: ParticipantConfig[]
+): string {
+  const consultantLines = participants
+    .map(
+      (p) =>
+        `- **${p.displayName}**: use the ${p.agentName} subagent. ${p.brainstormRole || p.roleTitle || "Consultant"}.`
+    )
+    .join("\n");
+
+  const agentTaskLines = participants
+    .map((p) => `   - speaker: "${p.displayName}"`)
+    .join("\n");
+
+  return [
+    `🧪 BLACKBOARD BRAINSTORM LAB (v2): ${topic}`,
+    "",
+    `Initial meeting folder: \`${absDir}\``,
+    "",
+    "You are facilitating a v2 lab brainstorming session with ARTIFACT TRACKING, EDGE GRAPH, and STATE MANAGEMENT.",
+    "Each consultant writes their FULL contribution to disk via meeting_append_entry.",
+    "",
+    "## Consultants (3 rounds)",
+    consultantLines,
+    "",
+    "## PRE-ROUND STEP — Assign a Human-Readable Title",
+    "",
+    `Before Round 1, choose a concise human-readable meeting title for "${topic}" and call:`,
+    `  meeting_rename({ meetingDir: "${absDir}", title: "<your concise title>" })`,
+    "",
+    "Use the returned `newMeetingDir` for ALL subsequent meeting tools and subagent tasks. If rename fails, continue with the original meetingDir.",
+    "",
+    "## V2 LAB TOOLS (in addition to meeting_append_entry/meeting_read_*)",
+    "",
+    "You have these new tools for the artifact/graph/state system:",
+    "",
+    "- **meeting_append_artifact**: Extract structured artifacts (Claim, Question, Risk, Evidence, Decision, Action) from entries. REQUIRES sourceEntryId + sourceQuote.",
+    "- **meeting_append_edge**: Define relationships between artifacts (supports, opposes, duplicates, blocks, resolves, supersedes). Records creator, basis, status.",
+    "- **meeting_read_artifacts**: Query artifacts by type, status, or source entry. Always returns source quotes.",
+    "- **meeting_get_state**: Read current meeting state (phase, open questions, conflicts, decisions, actions, next step). Derived fields are always rebuilt from artifacts+edges.",
+    "- **meeting_update_state**: Advance the meeting phase, round, and set the next step. Phase transitions are auto-logged as events. Phase is validated against allowed values.",
+    "- **meeting_log_event**: Record important events (facilitator decisions, user feedback, errors, retries) for auditability.",
+    "",
+    "## CRITICAL INSTRUCTIONS",
+    "",
+    "### Blackboard-first — do NOT paste prior participant text into subagent tasks",
+    "",
+    "The meeting blackboard is the single source of truth. Subagent tasks must direct participants to READ from the blackboard.",
+    "",
+    "- Round 1: subagents write initial analysis. No prior entries to read.",
+    "- Round 2: tell subagents to call meeting_read_index and meeting_read_entry to read Round 1 entries.",
+    "- Round 3: tell subagents to read ALL prior round entries AND any User feedback entries.",
+    "- User feedback: append to blackboard as speaker: \"User\", phase: \"Feedback after Round N\".",
+    "",
+    "### For subagents (include in EVERY task):",
+    "1. Read prior context from the blackboard using meeting_read_index and meeting_read_entry.",
+    "2. Write your FULL contribution using meeting_append_entry with speaker, phase, summary, and content.",
+    "3. After writing, reply ONLY with: `WROTE_ENTRY: <your one-sentence summary>`",
+    "4. DO NOT paste your full analysis into the chat.",
+    "",
+    "### ARTIFACT EXTRACTION (after each round):",
+    "",
+    "After each round completes, YOU (the facilitator) MUST extract structured artifacts from every entry:",
+    "",
+    "1. Read each entry with meeting_read_entry.",
+    "2. For each Claim found: call meeting_append_artifact with type: \"claim\", the claim content, sourceEntryId, sourceEntryPath, sourceQuote (verbatim), confidence (high/medium/low), and evidenceLevel (strong/moderate/weak/none).",
+    "3. For each Question found: call meeting_append_artifact with type: \"question\", the question content, and raisedBy.",
+    "4. For each Risk identified: call with type: \"risk\", severity, and likelihood.",
+    "5. For each Evidence cited: call with type: \"evidence\", strength, and supports/opposes artifact IDs.",
+    "6. For each Decision proposed: call with type: \"decision\", rationale, blockedBy, and dependsOn.",
+    "7. For each Action item: call with type: \"action\", assignee, and priority.",
+    "",
+    "**Hard rules for artifacts:**",
+    "- sourceQuote MUST be a non-empty verbatim quote from the source entry.",
+    "- High-confidence claims with evidenceLevel=\"none\" are auto-marked as evidenceDebt.",
+    "- Decisions with non-empty blockedBy are auto-marked as non-consensus.",
+    "",
+    "### EDGE CREATION (after artifact extraction):",
+    "",
+    "After extracting artifacts, define relationships:",
+    "- If artifact A supports B: meeting_append_edge with type: \"supports\"",
+    "- If A opposes B: meeting_append_edge with type: \"opposes\"",
+    "- If A blocks B: meeting_append_edge with type: \"blocks\"",
+    "- If A resolves B: meeting_append_edge with type: \"resolves\"",
+    "- Every edge must record creator, basis, and status.",
+    "",
+    "### STATE MANAGEMENT:",
+    "",
+    "- After each round, call meeting_update_state to advance the phase and round:",
+    "  * After Round 1: phase=\"challenge\", round=1, nextStep=\"Round 2 — challenge and refine\"",
+    "  * After Round 2: phase=\"evidence_check\", round=2, nextStep=\"Round 3 — final synthesis\"",
+    "  * After Round 3: phase=\"converge\", round=3, nextStep=\"Generate conclusion\"",
+    "- Include controllerReasoning explaining why this phase transition.",
+    "- Call meeting_log_event for every facilitator decision and user feedback.",
+    "",
+    "### NOISE REDUCTION (CRITICAL):",
+    "",
+    "- **DO NOT echo every participant entry detail.** The entries are on the blackboard.",
+    "- Default output: ONLY show structural summary (round structure, conflict changes, new questions, next step).",
+    "- Put per-entry echo behind verbose/debug — only expand when the user asks.",
+    "- Your output format after each round:",
+    "  1. Round summary (what was discussed, key additions)",
+    "  2. Conflict matrix (who disagreed with whom, on what)",
+    "  3. New open questions",
+    "  4. Accepted decisions (if any)",
+    "  5. Next step recommendation",
+    "- Keep it brief. The blackboard has the full detail.",
+    "",
+    "### CONTEXT PACK (before Round 2 and 3):",
+    "",
+    "Before launching Round 2 or Round 3, generate a CONTEXT PACK from the current state:",
+    "- Call meeting_get_state to get current openQuestions, activeConflicts, acceptedDecisions.",
+    "- Call meeting_read_artifacts to get relevant artifacts with source quotes.",
+    "- In each subagent's task, include a brief summary of: unresolved questions, active conflicts (who vs whom), accepted decisions, and any unaddressed risks.",
+    "- ALSO instruct subagents to read the blackboard themselves — the context pack is a navigation aid, not a replacement.",
+    "",
+    "### HARD RULES FOR FINAL CONCLUSION:",
+    "",
+    "1. Every assertion in conclusion must reference an artifact ID, entry ID, AND source quote.",
+    "2. High-confidence claims with evidenceLevel=\"none\" → downgrade in conclusion, mark as evidence debt.",
+    "3. A decision blocked by unresolved risks/conflicts must NOT be written as consensus.",
+    "4. Every edge in the conclusion trail must have creator, basis, and status documented.",
+    "5. User feedback must be logged as an event, reflected in state, and may create new artifacts.",
+    "",
+    "## Protocol (same as legacy /brainstorm)",
+    "",
+    "Round 1: Each consultant gives initial analysis. Run in parallel.",
+    "Stop after Round 1. Present your structural overview, then ASK for user feedback or permission to continue.",
+    "Round 2: only after user replies. Tell subagents to read Round 1 entries + context pack, then challenge others and improve.",
+    "Stop after Round 2. Present updated overview, then ASK for permission.",
+    "Round 3: only after user replies. Tell subagents to read ALL entries. Each gives FINAL recommendation, synthesizing the best ideas.",
+    "",
+    "After Round 3, present the complete structural overview and ask whether to write the final conclusion. Only write conclusion.md after the user confirms.",
+    "",
+    "## FAILURE HANDLING (same as legacy)",
+    "",
+    "Detect failures: error text, empty output, no WROTE_ENTRY, no meeting_append_entry call.",
+    "Retry: wait 5-10s, retry up to 2 more times (3 total). On retry: \"PREVIOUS ATTEMPT FAILED. This is retry N of 2.\"",
+    "If unavailable: mark as \"[displayName] ([agentName]): 本轮未响应\", continue with remaining participants.",
+    "If same participant fails 2 consecutive rounds, warn user.",
+    "NEVER fabricate responses. NEVER abort session for one failure.",
+    "",
+    "## IMPORTANT",
+    "- All responses in Chinese (中文).",
+    "- Save transcript.md and (after user confirms) conclusion.md per the MEETING OUTPUT PROTOCOL.",
+    "- The user can intervene at any time to steer the discussion.",
+    "- Legacy /brainstorm and /debate remain available as escape hatches.",
+  ].join("\n");
+}
+
+
 
 // ────────────────────────────────────────────────────────
 // Helpers
@@ -914,6 +1224,59 @@ async function createUniqueMeetingDir(
   );
 }
 
+
+/**
+ * Seed the lab-specific files for a brainstorm-lab meeting.
+ */
+async function seedLabMeeting(
+  absDir: string,
+  topic: string,
+  participants: ParticipantConfig[]
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  // artifacts.jsonl
+  const artifactsPath = path.join(absDir, "artifacts.jsonl");
+  assertWritableFilePath(artifactsPath, absDir, "meeting artifacts");
+  await fsp.writeFile(artifactsPath, "", "utf-8");
+
+  // edges.jsonl
+  const edgesPath = path.join(absDir, "edges.jsonl");
+  assertWritableFilePath(edgesPath, absDir, "meeting edges");
+  await fsp.writeFile(edgesPath, "", "utf-8");
+
+  // events.jsonl — seed with creation event
+  const eventsPath = path.join(absDir, "events.jsonl");
+  assertWritableFilePath(eventsPath, absDir, "meeting events");
+  const initEvent: MeetingEvent = {
+    id: "evt-001",
+    type: "state_transition",
+    timestamp: now,
+    agent: "System",
+    summary: "Lab meeting created",
+    details: { topic, initialPhase: "briefing" },
+  };
+  await fsp.writeFile(eventsPath, JSON.stringify(initEvent) + "\n", "utf-8");
+
+  // state.json
+  const statePath = path.join(absDir, "state.json");
+  assertWritableFilePath(statePath, absDir, "meeting state");
+  const initialState: MeetingState = {
+    meetingDir: absDir,
+    topic,
+    phase: "briefing",
+    round: 0,
+    participants: participants.map((p) => p.displayName),
+    openQuestions: [],
+    activeConflicts: [],
+    acceptedDecisions: [],
+    pendingActions: [],
+    nextStep: "Rename the meeting, then proceed to Round 1",
+    lastUpdated: now,
+  };
+  await fsp.writeFile(statePath, JSON.stringify(initialState, null, 2), "utf-8");
+}
+
 /** Check whether a meeting already has entries. */
 async function meetingHasEntries(absDir: string): Promise<boolean> {
   const manifest = await readManifest(absDir);
@@ -942,10 +1305,25 @@ function replaceBlackboardHeading(absDir: string, title: string): void {
 
   let content = fs.readFileSync(blackboardPath, "utf-8");
   content = content.replace(
-    /^# (Meeting|Debate): .*$/m,
+    /^# (Meeting|Debate|Lab): .*$/m,
     `# $1: ${title}`
   );
   fs.writeFileSync(blackboardPath, content, "utf-8");
+}
+
+/** Update state.json.meetingDir after a meeting rename. */
+async function updateStateMeetingDir(absDir: string, newMeetingDir: string): Promise<void> {
+  const statePath = path.join(absDir, "state.json");
+  try {
+    assertWritableFilePath(statePath, absDir, "meeting state");
+    const raw = await fsp.readFile(statePath, "utf-8");
+    const state: MeetingState = JSON.parse(raw);
+    state.meetingDir = newMeetingDir;
+    state.lastUpdated = new Date().toISOString();
+    await fsp.writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
+  } catch {
+    // state.json may not exist for legacy meetings — that's fine
+  }
 }
 
 /**
@@ -1231,6 +1609,8 @@ export default function (pi: ExtensionAPI) {
 
           // Replace blackboard heading
           replaceBlackboardHeading(targetAbsDir, sanitizedTitle);
+          // Update state.json.meetingDir for lab meetings
+          await updateStateMeetingDir(targetAbsDir, targetAbsDir);
         } catch (err) {
           startWatching(pi, targetAbsDir);
           throw err;
@@ -1537,6 +1917,645 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+
+  // ── Tool: meeting_append_artifact ─────────────────────
+
+  pi.registerTool({
+    name: "meeting_append_artifact",
+    label: "Meeting Append Artifact",
+    description:
+      "Append a structured artifact (Claim, Question, Risk, Evidence, Decision, Action) " +
+      "derived from a meeting entry. Every artifact MUST include sourceEntryId and sourceQuote. " +
+      "High-confidence claims without evidence are marked as evidence debt.",
+    promptSnippet:
+      "meeting_append_artifact({ meetingDir, artifact: { type, content, sourceEntryId, sourceEntryPath, sourceQuote, ... } }) — extract structured artifact",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+      artifact: Type.Object({
+        type: Type.String({ description: "claim | question | risk | evidence | decision | action" }),
+        content: Type.String({ description: "The artifact body text" }),
+        sourceEntryId: Type.String({ description: "Source entry ID, e.g. '0001'" }),
+        sourceEntryPath: Type.String({ description: "Relative path to source entry, e.g. entries/0001-gpt-round_1.md" }),
+        sourceQuote: Type.String({ description: "Verbatim quote from source entry" }),
+        confidence: Type.Optional(Type.String({ description: "For claims: high | medium | low" })),
+        evidenceLevel: Type.Optional(Type.String({ description: "strong | moderate | weak | none" })),
+        severity: Type.Optional(Type.String({ description: "For risks: critical | high | medium | low" })),
+        likelihood: Type.Optional(Type.String({ description: "For risks: certain | likely | possible | unlikely" })),
+        strength: Type.Optional(Type.String({ description: "For evidence: strong | moderate | weak | none" })),
+        rationale: Type.Optional(Type.String({ description: "For decisions: why this decision was made" })),
+        raisedBy: Type.Optional(Type.String({ description: "For questions: who raised it (displayName)" })),
+        blockedBy: Type.Optional(Type.Array(Type.String(), { description: "For decisions: artifact IDs that block this" })),
+        dependsOn: Type.Optional(Type.Array(Type.String(), { description: "For decisions: artifact IDs this depends on" })),
+        supports: Type.Optional(Type.Array(Type.String(), { description: "Artifact IDs this evidence supports" })),
+        opposes: Type.Optional(Type.Array(Type.String(), { description: "Artifact IDs this evidence opposes" })),
+        assignee: Type.Optional(Type.String({ description: "For actions: who is responsible" })),
+        priority: Type.Optional(Type.String({ description: "For actions: must | should | could" })),
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+
+      // Reject if sourceQuote is empty
+      if (!params.artifact.sourceQuote || !params.artifact.sourceQuote.trim()) {
+        return {
+          content: [{ type: "text" as const, text: "REJECTED: sourceQuote must be a non-empty verbatim quote from the source entry." }],
+          details: {},
+          isError: true,
+        };
+      }
+      if (!params.artifact.sourceEntryId || !params.artifact.sourceEntryId.trim()) {
+        return {
+          content: [{ type: "text" as const, text: "REJECTED: sourceEntryId must be non-empty." }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const manifestPath = path.join(absDir, "manifest.json");
+      assertWritableFilePath(manifestPath, absDir, "manifest");
+
+      return withFileMutationQueue(manifestPath, async () => {
+        const artifactsPath = path.join(absDir, "artifacts.jsonl");
+        assertWritableFilePath(artifactsPath, absDir, "meeting artifacts");
+
+        // Determine next artifact ID
+        let nextNum = 1;
+        try {
+          const raw = await fsp.readFile(artifactsPath, "utf-8");
+          const fileLines = raw.split("\n").filter((l: string) => l.trim());
+          nextNum = fileLines.length + 1;
+        } catch {
+          // File doesn't exist or is empty — start at 1
+        }
+
+        const artId = `${params.artifact.type}-${String(nextNum).padStart(3, "0")}`;
+        const now = new Date().toISOString();
+
+        const source: ArtifactSourceRef = {
+          entryId: params.artifact.sourceEntryId,
+          entryPath: params.artifact.sourceEntryPath,
+          sourceQuote: params.artifact.sourceQuote,
+        };
+
+        let artifact: Artifact;
+
+        switch (params.artifact.type) {
+          case "claim": {
+            const confidence = (params.artifact.confidence || "medium") as "high" | "medium" | "low";
+            const evidenceLevel = (params.artifact.evidenceLevel || "none") as EvidenceLevel;
+            const evidenceDebt = confidence === "high" && evidenceLevel === "none";
+            artifact = {
+              type: "claim",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              confidence,
+              evidenceLevel,
+              evidenceDebt,
+              acceptedBy: [],
+              challengedBy: [],
+            };
+            break;
+          }
+          case "question": {
+            artifact = {
+              type: "question",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              raisedBy: params.artifact.raisedBy || "Facilitator",
+              addressedBy: [],
+            };
+            break;
+          }
+          case "risk": {
+            artifact = {
+              type: "risk",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              severity: (params.artifact.severity || "medium") as "critical" | "high" | "medium" | "low",
+              likelihood: (params.artifact.likelihood || "possible") as "certain" | "likely" | "possible" | "unlikely",
+              mitigation: undefined,
+            };
+            break;
+          }
+          case "evidence": {
+            artifact = {
+              type: "evidence",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              strength: (params.artifact.strength || "moderate") as EvidenceLevel,
+              supports: params.artifact.supports || [],
+              opposes: params.artifact.opposes || [],
+            };
+            break;
+          }
+          case "decision": {
+            const blockedBy = params.artifact.blockedBy || [];
+            artifact = {
+              type: "decision",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              rationale: params.artifact.rationale || "",
+              blockedBy,
+              dependsOn: params.artifact.dependsOn || [],
+              consensus: blockedBy.length === 0,
+            };
+            break;
+          }
+          case "action": {
+            artifact = {
+              type: "action",
+              id: artId,
+              timestamp: now,
+              source,
+              status: "active",
+              content: params.artifact.content,
+              assignee: params.artifact.assignee || "Unassigned",
+              priority: (params.artifact.priority || "should") as "must" | "should" | "could",
+            };
+            break;
+          }
+          default:
+            return {
+              content: [{ type: "text" as const, text: `Unknown artifact type: ${params.artifact.type}. Must be one of: claim, question, risk, evidence, decision, action.` }],
+              details: {},
+              isError: true,
+            };
+        }
+
+        // Write artifact
+        await fsp.appendFile(artifactsPath, JSON.stringify(artifact) + "\n", "utf-8");
+
+        // Auto-generate edges from supports/opposes lists
+        const edgesPath = path.join(absDir, "edges.jsonl");
+        assertWritableFilePath(edgesPath, absDir, "meeting edges");
+
+        const autoEdges: Edge[] = [];
+        if ("supports" in artifact && (artifact as EvidenceArtifact).supports.length > 0) {
+          for (const targetId of (artifact as EvidenceArtifact).supports) {
+            autoEdges.push({
+              id: "",
+              from: artId,
+              to: targetId,
+              type: "supports",
+              creator: "Facilitator",
+              basis: `Evidence ${artId} supports ${targetId}`,
+              status: "active",
+              timestamp: now,
+            });
+          }
+        }
+        if ("opposes" in artifact && (artifact as EvidenceArtifact).opposes.length > 0) {
+          for (const targetId of (artifact as EvidenceArtifact).opposes) {
+            autoEdges.push({
+              id: "",
+              from: artId,
+              to: targetId,
+              type: "opposes",
+              creator: "Facilitator",
+              basis: `Evidence ${artId} opposes ${targetId}`,
+              status: "active",
+              timestamp: now,
+            });
+          }
+        }
+
+        for (const e of autoEdges) {
+          let nextEdgeNum = 1;
+          try {
+            const raw = await fsp.readFile(edgesPath, "utf-8");
+            nextEdgeNum = raw.split("\n").filter((l: string) => l.trim()).length + 1;
+          } catch { /* empty */ }
+          e.id = `edge-${String(nextEdgeNum).padStart(3, "0")}`;
+          await fsp.appendFile(edgesPath, JSON.stringify(e) + "\n", "utf-8");
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Artifact ${artId} (${artifact.type}) written — source: ${params.artifact.sourceEntryId}` }],
+          details: { id: artId, type: artifact.type },
+        };
+      });
+    },
+  });
+
+  // ── Tool: meeting_append_edge ─────────────────────────
+
+  pi.registerTool({
+    name: "meeting_append_edge",
+    label: "Meeting Append Edge",
+    description:
+      "Create a relationship edge between two artifacts (supports, opposes, duplicates, blocks, resolves, supersedes). " +
+      "Every edge records creator, basis, and status.",
+    promptSnippet:
+      "meeting_append_edge({ meetingDir, from, to, type, creator, basis }) — define artifact relationship",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+      from: Type.String({ description: "Source artifact ID" }),
+      to: Type.String({ description: "Target artifact ID" }),
+      type: Type.String({ description: "supports | opposes | duplicates | blocks | resolves | supersedes" }),
+      creator: Type.String({ description: "Who is creating this edge (displayName or 'Facilitator')" }),
+      basis: Type.String({ description: "Reasoning for this relationship" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+      const manifestPath = path.join(absDir, "manifest.json");
+      assertWritableFilePath(manifestPath, absDir, "manifest");
+
+      const validTypes: EdgeType[] = ["supports", "opposes", "duplicates", "blocks", "resolves", "supersedes"];
+      if (!validTypes.includes(params.type as EdgeType)) {
+        return {
+          content: [{ type: "text" as const, text: `Invalid edge type: ${params.type}. Must be one of: ${validTypes.join(", ")}` }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      return withFileMutationQueue(manifestPath, async () => {
+        const edgesPath = path.join(absDir, "edges.jsonl");
+        assertWritableFilePath(edgesPath, absDir, "meeting edges");
+
+        let nextNum = 1;
+        try {
+          const raw = await fsp.readFile(edgesPath, "utf-8");
+          nextNum = raw.split("\n").filter((l: string) => l.trim()).length + 1;
+        } catch { /* empty */ }
+
+        const edgeId = `edge-${String(nextNum).padStart(3, "0")}`;
+        const now = new Date().toISOString();
+
+        const edge: Edge = {
+          id: edgeId,
+          from: params.from,
+          to: params.to,
+          type: params.type as EdgeType,
+          creator: params.creator,
+          basis: params.basis,
+          status: "active",
+          timestamp: now,
+        };
+
+        await fsp.appendFile(edgesPath, JSON.stringify(edge) + "\n", "utf-8");
+
+        return {
+          content: [{ type: "text" as const, text: `Edge ${edgeId} (${edge.type}) written: ${edge.from} → ${edge.to}` }],
+          details: { id: edgeId, type: edge.type },
+        };
+      });
+    },
+  });
+
+  // ── Tool: meeting_read_artifacts ──────────────────────
+
+  pi.registerTool({
+    name: "meeting_read_artifacts",
+    label: "Meeting Read Artifacts",
+    description:
+      "Query artifacts from a lab meeting. Filter by type, status, or source entry. " +
+      "Always returns sourceEntryId and sourceQuote alongside each artifact.",
+    promptSnippet:
+      "meeting_read_artifacts({ meetingDir, type?, status?, sourceEntryId?, limit? }) — query structured artifacts",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+      type: Type.Optional(Type.String({ description: "Filter: claim, question, risk, evidence, decision, action" })),
+      status: Type.Optional(Type.String({ description: "Filter: active, resolved, superseded, invalidated" })),
+      sourceEntryId: Type.Optional(Type.String({ description: "Filter by source entry ID" })),
+      limit: Type.Optional(Type.Number({ description: "Max entries (default 50)" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+      const artifactsPath = path.join(absDir, "artifacts.jsonl");
+
+      let artifacts: Artifact[] = [];
+      try {
+        assertWritableFilePath(artifactsPath, absDir, "meeting artifacts");
+        const raw = await fsp.readFile(artifactsPath, "utf-8");
+        artifacts = raw
+          .split("\n")
+          .filter((l: string) => l.trim())
+          .map((l: string) => JSON.parse(l) as Artifact);
+      } catch {
+        return {
+          content: [{ type: "text" as const, text: "No artifacts recorded yet." }],
+          details: { artifacts: [] },
+        };
+      }
+
+      if (params.type) {
+        artifacts = artifacts.filter((a: Artifact) => a.type === params.type);
+      }
+      if (params.status) {
+        artifacts = artifacts.filter((a: Artifact) => a.status === params.status);
+      }
+      if (params.sourceEntryId) {
+        artifacts = artifacts.filter((a: Artifact) => a.source.entryId === params.sourceEntryId);
+      }
+
+      artifacts.sort((a: Artifact, b: Artifact) => b.timestamp.localeCompare(a.timestamp));
+
+      const limit = params.limit || 50;
+      const sliced = artifacts.slice(0, limit);
+
+      const summary = sliced
+        .map((a: Artifact) => {
+          const quote = a.source.sourceQuote.length > 80
+            ? a.source.sourceQuote.slice(0, 80) + "..."
+            : a.source.sourceQuote;
+          const debt = (a.type === "claim" && (a as ClaimArtifact).evidenceDebt)
+            ? " [EVIDENCE_DEBT]"
+            : "";
+          const blocked = (a.type === "decision" && !(a as DecisionArtifact).consensus)
+            ? " [BLOCKED]"
+            : "";
+          return `  [${a.id}] ${a.type} (${a.status})${debt}${blocked} — src: ${a.source.entryId}\n    "${quote}"`;
+        })
+        .join("\n");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Artifacts (${sliced.length} of ${artifacts.length}):\n${summary || "  (none matching)"}`,
+          },
+        ],
+        details: { artifacts: sliced, total: artifacts.length },
+      };
+    },
+  });
+
+  // ── Tool: meeting_get_state ───────────────────────────
+
+  pi.registerTool({
+    name: "meeting_get_state",
+    label: "Meeting Get State",
+    description:
+      "Read the current meeting state: phase, open questions, active conflicts, accepted decisions, pending actions, and next step. " +
+      "Derived fields (openQuestions, activeConflicts, acceptedDecisions, pendingActions) are always rebuilt from artifacts and edges.",
+    promptSnippet:
+      "meeting_get_state({ meetingDir }) — read meeting state",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+      const statePath = path.join(absDir, "state.json");
+
+      // Load base state from state.json (phase, round, nextStep, controllerReasoning)
+      let baseState: MeetingState;
+      try {
+        assertWritableFilePath(statePath, absDir, "meeting state");
+        const raw = await fsp.readFile(statePath, "utf-8");
+        baseState = JSON.parse(raw) as MeetingState;
+      } catch {
+        baseState = {
+          meetingDir: absDir,
+          topic: path.basename(absDir),
+          phase: "briefing",
+          round: 0,
+          participants: [],
+          openQuestions: [],
+          activeConflicts: [],
+          acceptedDecisions: [],
+          pendingActions: [],
+          nextStep: "State rebuilt from artifacts. Proceed with caution.",
+          lastUpdated: new Date().toISOString(),
+        };
+      }
+
+      // Always rebuild derived fields from artifacts + edges
+      const artifactsPath = path.join(absDir, "artifacts.jsonl");
+      const edgesPath = path.join(absDir, "edges.jsonl");
+      const openQuestions: string[] = [];
+      const activeConflicts: string[] = [];
+      const acceptedDecisions: string[] = [];
+      const pendingActions: string[] = [];
+
+      try {
+        assertWritableFilePath(artifactsPath, absDir, "meeting artifacts");
+        const artRaw = await fsp.readFile(artifactsPath, "utf-8");
+        const allArtifacts: Artifact[] = artRaw
+          .split("\n").filter((l: string) => l.trim())
+          .map((l: string) => JSON.parse(l) as Artifact);
+
+        for (const a of allArtifacts) {
+          if (a.type === "question" && a.status === "active") openQuestions.push(a.id);
+          if (a.type === "decision" && a.status === "active" && (a as DecisionArtifact).blockedBy.length === 0 && (a as DecisionArtifact).consensus)
+            acceptedDecisions.push(a.id);
+          if (a.type === "action" && a.status === "active") pendingActions.push(a.id);
+        }
+      } catch { /* ignore — no artifacts yet */ }
+
+      try {
+        assertWritableFilePath(edgesPath, absDir, "meeting edges");
+        const edgeRaw = await fsp.readFile(edgesPath, "utf-8");
+        const edges: Edge[] = edgeRaw
+          .split("\n").filter((l: string) => l.trim())
+          .map((l: string) => JSON.parse(l) as Edge);
+        const conflictIds = new Set<string>();
+        for (const e of edges) {
+          if (e.type === "opposes" && e.status === "active") {
+            conflictIds.add(e.from);
+            conflictIds.add(e.to);
+          }
+        }
+        activeConflicts.push(...conflictIds);
+      } catch { /* ignore — no edges yet */ }
+
+      // Overlay derived fields onto base state
+      const state: MeetingState = {
+        ...baseState,
+        openQuestions,
+        activeConflicts,
+        acceptedDecisions,
+        pendingActions,
+      };
+
+      const summary = [
+        `Phase: ${state.phase} | Round: ${state.round}`,
+        `Open Questions: ${state.openQuestions.length} [${state.openQuestions.join(", ") || "none"}]`,
+        `Active Conflicts: ${state.activeConflicts.length} [${state.activeConflicts.join(", ") || "none"}]`,
+        `Accepted Decisions: ${state.acceptedDecisions.length} [${state.acceptedDecisions.join(", ") || "none"}]`,
+        `Pending Actions: ${state.pendingActions.length} [${state.pendingActions.join(", ") || "none"}]`,
+        `Next Step: ${state.nextStep}`,
+        state.controllerReasoning ? `Controller Reasoning: ${state.controllerReasoning}` : "",
+      ].filter(Boolean).join("\n");
+
+      return {
+        content: [{ type: "text" as const, text: summary }],
+        details: { state },
+      };
+    },
+  });
+
+  // ── Tool: meeting_update_state ────────────────────────
+
+  const VALID_PHASES: SessionPhase[] = [
+    "briefing", "diverge", "challenge", "evidence_check", "converge", "conclusion", "archived",
+  ];
+
+  pi.registerTool({
+    name: "meeting_update_state",
+    label: "Meeting Update State",
+    description:
+      "Update the meeting phase, round, next step, and controller reasoning. " +
+      "State transitions are logged as events. Phase is validated against allowed values.",
+    promptSnippet:
+      "meeting_update_state({ meetingDir, phase?, round?, nextStep?, controllerReasoning? }) — update meeting state",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+      phase: Type.Optional(Type.String({ description: "New phase: briefing, diverge, challenge, evidence_check, converge, conclusion, archived" })),
+      round: Type.Optional(Type.Number({ description: "Current round number (0, 1, 2, 3)" })),
+      nextStep: Type.Optional(Type.String({ description: "Human-readable suggestion for what to do next" })),
+      controllerReasoning: Type.Optional(Type.String({ description: "Why the facilitator made this decision" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+      const manifestPath = path.join(absDir, "manifest.json");
+      assertWritableFilePath(manifestPath, absDir, "manifest");
+
+      // Validate phase if provided
+      if (params.phase && !VALID_PHASES.includes(params.phase as SessionPhase)) {
+        return {
+          content: [{ type: "text" as const, text: `Invalid phase: "${params.phase}". Must be one of: ${VALID_PHASES.join(", ")}` }],
+          details: {},
+          isError: true,
+        };
+      }
+
+      return withFileMutationQueue(manifestPath, async () => {
+        const statePath = path.join(absDir, "state.json");
+        assertWritableFilePath(statePath, absDir, "meeting state");
+
+        let oldState: MeetingState;
+        try {
+          const raw = await fsp.readFile(statePath, "utf-8");
+          oldState = JSON.parse(raw) as MeetingState;
+        } catch {
+          oldState = {
+            meetingDir: absDir,
+            topic: path.basename(absDir),
+            phase: "briefing",
+            round: 0,
+            participants: [],
+            openQuestions: [],
+            activeConflicts: [],
+            acceptedDecisions: [],
+            pendingActions: [],
+            nextStep: "",
+            lastUpdated: new Date().toISOString(),
+          };
+        }
+
+        const now = new Date().toISOString();
+        const phaseChanged = params.phase && params.phase !== oldState.phase;
+
+        const newState: MeetingState = {
+          ...oldState,
+          phase: (params.phase as SessionPhase) || oldState.phase,
+          round: params.round !== undefined ? params.round : oldState.round,
+          nextStep: params.nextStep ?? oldState.nextStep,
+          controllerReasoning: params.controllerReasoning ?? oldState.controllerReasoning,
+          lastUpdated: now,
+        };
+
+        await fsp.writeFile(statePath, JSON.stringify(newState, null, 2), "utf-8");
+
+        // Log state transition if phase changed
+        if (phaseChanged) {
+          const eventsPath = path.join(absDir, "events.jsonl");
+          assertWritableFilePath(eventsPath, absDir, "meeting events");
+          let nextEventNum = 1;
+          try {
+            const raw = await fsp.readFile(eventsPath, "utf-8");
+            nextEventNum = raw.split("\n").filter((l: string) => l.trim()).length + 1;
+          } catch { /* empty */ }
+          const event: MeetingEvent = {
+            id: `evt-${String(nextEventNum).padStart(3, "0")}`,
+            type: "state_transition",
+            timestamp: now,
+            agent: "Facilitator",
+            summary: `Phase changed: ${oldState.phase} → ${newState.phase}`,
+            details: { oldPhase: oldState.phase, newPhase: newState.phase, reasoning: params.controllerReasoning || "" },
+          };
+          await fsp.appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `State updated. Phase: ${oldState.phase} → ${newState.phase}. Round: ${newState.round}. Next step: ${newState.nextStep}`,
+            },
+          ],
+          details: { oldState, newState },
+        };
+      });
+    },
+  });
+
+  // ── Tool: meeting_log_event ───────────────────────────
+
+  pi.registerTool({
+    name: "meeting_log_event",
+    label: "Meeting Log Event",
+    description:
+      "Record a meeting event (facilitator_decision, user_feedback, error, retry, digest_generated) " +
+      "for auditability and recovery.",
+    promptSnippet:
+      "meeting_log_event({ meetingDir, type, summary, details? }) — log meeting event",
+    parameters: Type.Object({
+      meetingDir: Type.String({ description: "Absolute path to meeting directory" }),
+      type: Type.String({ description: "facilitator_decision | user_feedback | error | retry | digest_generated" }),
+      summary: Type.String({ description: "One-line summary of the event" }),
+      details: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Arbitrary context data" })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const absDir = validateMeetingDir(params.meetingDir, ctx.cwd);
+      const manifestPath = path.join(absDir, "manifest.json");
+      assertWritableFilePath(manifestPath, absDir, "manifest");
+
+      return withFileMutationQueue(manifestPath, async () => {
+        const eventsPath = path.join(absDir, "events.jsonl");
+        assertWritableFilePath(eventsPath, absDir, "meeting events");
+
+        let nextNum = 1;
+        try {
+          const raw = await fsp.readFile(eventsPath, "utf-8");
+          nextNum = raw.split("\n").filter((l: string) => l.trim()).length + 1;
+        } catch { /* empty */ }
+
+        const event: MeetingEvent = {
+          id: `evt-${String(nextNum).padStart(3, "0")}`,
+          type: params.type as EventType,
+          timestamp: new Date().toISOString(),
+          agent: "Facilitator",
+          summary: params.summary,
+          details: params.details || {},
+        };
+
+        await fsp.appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
+
+        return {
+          content: [{ type: "text" as const, text: `Event ${event.id} (${event.type}) logged.` }],
+          details: { id: event.id },
+        };
+      });
+    },
+  });
+
   // ── Message Renderer: meeting-entry ───────────────────
 
   pi.registerMessageRenderer(
@@ -1780,6 +2799,114 @@ export default function (pi: ExtensionAPI) {
 
       // Send orchestration prompt to main agent
       const promptText = buildDebatePrompt(topic, absDir, participants);
+      pi.sendUserMessage([
+        {
+          type: "text" as const,
+          text: promptText,
+        },
+      ]);
+    },
+  });
+
+
+  // ── Command: /brainstorm-lab ─────────────────────────
+
+  pi.registerCommand("brainstorm-lab", {
+    description:
+      "Start a v2 lab brainstorming session with artifact tracking, edges, state, and context packs",
+    handler: async (args, ctx) => {
+      if (!args || !args.trim()) {
+        ctx.ui.notify("Usage: /brainstorm-lab <topic>", "warning");
+        return;
+      }
+
+      // Resolve participants from config
+      let participants: ParticipantConfig[];
+      try {
+        participants = resolveParticipants(ctx.cwd);
+      } catch (err: any) {
+        ctx.ui.notify(
+          `pi-brainstorm config error: ${err.message}`,
+          "error"
+        );
+        return;
+      }
+
+      const agentsReady = await ensureAgentsFromConfig(ctx, participants, {
+        allowGlobalWrites: !hasProjectConfig(ctx.cwd),
+      });
+      if (!agentsReady) return;
+
+      const topic = args.trim();
+      let absDir: string;
+      let meetingName: string;
+      try {
+        ({ absDir, meetingName } = await createUniqueMeetingDir(
+          ctx.cwd,
+          initialMeetingName("brainstorm")
+        ));
+      } catch (err: any) {
+        ctx.ui.notify(`Failed to create meeting folder: ${err.message}`, "error");
+        return;
+      }
+
+      // Assertions
+      assertDirectoryNoSymlink(absDir, "meeting directory");
+      assertDirectoryNoSymlink(
+        path.join(absDir, "entries"),
+        "entries directory"
+      );
+
+      // Create lab subdirectories
+      const viewsDir = path.join(absDir, "views");
+      await fsp.mkdir(viewsDir, { recursive: true });
+      assertDirectoryNoSymlink(viewsDir, "views directory");
+
+      // Seed lab files
+      await seedLabMeeting(absDir, topic, participants);
+
+      // Seed manifest
+      const manifest: MeetingManifest = {
+        topic,
+        created: new Date().toISOString(),
+        lastUpdate: new Date().toISOString(),
+        entryCount: 0,
+      };
+      await writeManifest(absDir, manifest);
+
+      // Seed index.jsonl (empty)
+      const indexJsonlPath = path.join(absDir, "index.jsonl");
+      assertWritableFilePath(indexJsonlPath, absDir, "meeting index");
+      await fsp.writeFile(indexJsonlPath, "", "utf-8");
+
+      // Seed blackboard.md header
+      const blackboardPath = path.join(absDir, "blackboard.md");
+      assertWritableFilePath(blackboardPath, absDir, "meeting blackboard");
+      const blackboardHeader = [
+        `# Lab: ${topic}`,
+        `> Mode: brainstorm-lab v2`,
+        `> Created: ${new Date().toISOString()}`,
+        `> Artifact tracking: enabled`,
+        `> Edges: enabled`,
+        `> State management: events + state.json`,
+        "",
+        "---",
+        "",
+      ].join("\n");
+      await fsp.writeFile(blackboardPath, blackboardHeader, "utf-8");
+
+      // Start watcher
+      startWatching(pi, absDir);
+
+      ctx.ui.notify(
+        `🧪 Brainstorm Lab: ${meetingName}\n` +
+        `  Folder: .pi-meetings/${meetingName}\n` +
+        `  Artifact tracking + edges + state management active`,
+        "info"
+      );
+
+      // Send orchestration prompt to main agent
+      const promptText = buildBrainstormLabPrompt(topic, absDir, participants);
       pi.sendUserMessage([
         {
           type: "text" as const,
