@@ -1,7 +1,7 @@
 {
   "name": "pi-brainstorm",
   "version": "0.4.3",
-  "description": "Multi-model brainstorming and debate sessions for pi subagents.",
+  "description": "Multi-agent brainstorming and debate sessions for pi subagents.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -10,7 +10,7 @@
     "brainstorm",
     "debate",
     "battle",
-    "multi-model",
+    "multi-agent",
     "subagents",
     "blackboard"
   ],

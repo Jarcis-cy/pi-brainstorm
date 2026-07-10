@@ -1,8 +1,8 @@
 # pi-brainstorm
 
-面向 [pi](https://github.com/earendil-works/pi-coding-agent) 的多模型头脑风暴与辩论插件。
+面向 [pi](https://github.com/earendil-works/pi-coding-agent) 的多 Agent 头脑风暴与辩论插件。
 
-`pi-brainstorm` 让来自不同供应商的不同模型参与同一场讨论。使用 `/brainstorm` 启动结构化的多轮头脑风暴；使用 `/debate` 启动更强对抗性的 battle，让不同 Agent 互相质疑假设、攻击薄弱点，直到讨论收敛。
+`pi-brainstorm` 让不同身份和提示词设定的 Agent 参与同一场讨论。随包提供的默认 Agent 全部使用 `neibu/gpt-5.5:xhigh`，差异来自角色视角，而不是底层模型。使用 `/brainstorm` 启动结构化讨论，使用 `/debate` 启动对抗辩论。
 
 插件会把每个参与者的完整发言保存在 `.pi-meetings/...` 下的本地会议黑板中。黑板是实现亮点，不是主要卖点：它让主会话保持简洁，只展示短卡片、主持人总结、共识、分歧和最终结论，同时完整 transcript 仍然保存在磁盘上。
 
@@ -10,10 +10,9 @@ English README: [README.md](./README.md).
 
 ## 功能
 
-- 多模型头脑风暴：参与者可配置（默认：GPT、DeepSeek、MiniMax、GLM）。
+- 多 Agent 头脑风暴：默认身份为 GPT-Progressive（追新探索者）、GPT-Localist（本地守成者）、GPT-Diagnostician（问题诊断者）、GPT-Critic（严苛质询者），底层统一使用 `neibu/gpt-5.5:xhigh`。
 - 辩论 / battle 模式：Agent 会攻击、审视、反驳彼此的观点。
 - 配置驱动：通过 YAML 添加、删除或自定义参与者。
-- 每轮输出聚焦共识、分歧、关键问题和下一步方向。
 - 参与者完整发言以 Markdown 文件保存到 `.pi-meetings/`。
 - 主会话中展示紧凑发言卡片，而不是粘贴长篇 transcript。
 - 使用 JSONL 索引作为轻量级跨轮上下文入口。
@@ -61,13 +60,13 @@ pi install /Users/jarcis/Project/pi-brainstorm
 
 ```yaml
 participants:
-  - displayName: Claude
-    agentName: claude-brainstormer
-    description: Claude 头脑风暴顾问。细致入微的分析师，用于多模型讨论。
-    model: anthropic/claude-sonnet-4-20250514:xhigh
+  - displayName: GPT-Analyst
+    agentName: gpt-analyst-brainstormer
+    description: GPT-5.5 头脑风暴顾问。细致入微的分析师，用于多 Agent 讨论。
+    model: neibu/gpt-5.5:xhigh
     roleTitle: 细致分析师
     rolePrompt: |
-      你是多模型头脑风暴中的分析顾问。擅长细致入微的论证和长篇分析。用中文回答。
+      你是多 Agent 头脑风暴中的分析顾问。擅长细致入微的论证和长篇分析。用中文回答。
     whatYouDo:
       - 提供细致、深入的逐点分析
       - 识别细微差别和边缘情况
@@ -80,6 +79,7 @@ participants:
 ```
 
 如需完全替换默认参与者，在覆盖文件中定义完整的 `participants` 列表即可。
+
 
 用户级配置可以在确认后创建或更新 `~/.pi/agent/agents/` 下的受管理 agent 文件。项目级配置只影响当前会话编排，但不会自动写入全局 agent 文件；如果需要自动同步 agent，请手动创建对应 agent，或把配置移到 `~/.pi/agent/pi-brainstorm.yaml`。
 
@@ -103,7 +103,7 @@ pi install npm:@narumitw/pi-subagents
 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/
 ```
 
-命令处理器会先创建本地会议记录，然后让主 Agent 通过 `subagent` 调用配置中定义的参与者（默认：`gpt-brainstormer`、`deepseek-brainstormer`、`minimax-brainstormer`、`glm-brainstormer`）。
+命令处理器会先创建本地会议记录，然后通过 `subagent` 调用配置中的参与者。默认通用 Agent 文件统一使用 `gpt-progressive-brainstormer`、`gpt-localist-brainstormer`、`gpt-diagnostician-brainstormer`、`gpt-critic-brainstormer`。所有默认身份的底层模型均为 `neibu/gpt-5.5:xhigh`。
 
 第一次使用时，如果这些用户级 agent 不存在，扩展会询问是否写入内置默认定义。已有同名且不含托管标记的文件不会被覆盖。
 
@@ -116,9 +116,10 @@ pi install npm:@narumitw/pi-subagents
 /debate <主题>
 ```
 
-`/brainstorm` 启动交互式三轮多模型头脑风暴。Round 1 和 Round 2 结束后，主持人应停止、总结本轮，并等待你的反馈或继续许可，再进入下一轮。
+`/brainstorm` 启动交互式三轮多 Agent 头脑风暴。Round 1 和 Round 2 结束后，主持人应停止、总结本轮，并等待你的反馈或继续许可，再进入下一轮。
 
 `/debate` 启动开放式多 Agent battle，直到收敛或用户介入为止。
+
 
 ## 工作方式
 
@@ -150,8 +151,8 @@ pi install npm:@narumitw/pi-subagents
   index.jsonl
   blackboard.md
   entries/
-    0001-gpt-round_1.md
-    0002-deepseek-round_1.md
+    0001-gpt-progressive-round_1.md
+    0002-gpt-localist-round_1.md
 ```
 
 `blackboard.md` 是完整 transcript。`index.jsonl` 是紧凑索引。参与者全文放在 `entries/`。

@@ -1,5 +1,5 @@
 /**
- * pi-brainstorm — Multi-model brainstorm/debate extension for Pi
+ * pi-brainstorm — Multi-agent brainstorm/debate extension for Pi
  *
  * Runs brainstorm and debate sessions across multiple subagents configured
  * via YAML. Full participant contributions are stored in a local filesystem
@@ -11,7 +11,7 @@
  * - meeting_append_entry tool — concurrency-safe append to meeting folder
  * - meeting_read_index tool — read meeting index
  * - meeting_read_entry tool — read full entry content
- * - /brainstorm command — multi-model brainstorming
+ * - /brainstorm command — multi-agent brainstorming
  * - /debate command — open-ended multi-agent debate
  * - meeting-entry message renderer — compact cards with expandable content
  * - File watcher — auto-posts new entries into the main conversation
@@ -215,16 +215,13 @@ function isSafeAgentName(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$/.test(value);
 }
 
-function resolveParticipants(cwd: string): ParticipantConfig[] {
-  const config = loadConfig(cwd);
-
-  if (
-    !config.participants ||
-    !Array.isArray(config.participants) ||
-    config.participants.length === 0
-  ) {
+function validateParticipants(
+  participants: ParticipantConfig[] | undefined,
+  configKey: string
+): ParticipantConfig[] {
+  if (!participants || !Array.isArray(participants) || participants.length === 0) {
     throw new Error(
-      "pi-brainstorm config must define at least one participant under 'participants'."
+      `pi-brainstorm config must define at least one participant under '${configKey}'.`
     );
   }
 
@@ -235,23 +232,24 @@ function resolveParticipants(cwd: string): ParticipantConfig[] {
     "rolePrompt",
   ];
 
-  for (let i = 0; i < config.participants.length; i++) {
-    const p = config.participants[i];
+  const seenAgentNames = new Set<string>();
+  for (let i = 0; i < participants.length; i++) {
+    const p = participants[i];
     for (const field of requiredFields) {
       if (!p[field]) {
         throw new Error(
-          `Participant at index ${i} is missing required field "${field}".`
+          `Participant at ${configKey}[${i}] is missing required field "${field}".`
         );
       }
     }
     if (typeof p.displayName !== "string" || !p.displayName.trim()) {
       throw new Error(
-        `Participant at index ${i} has invalid displayName.`
+        `Participant at ${configKey}[${i}] has invalid displayName.`
       );
     }
     if (typeof p.agentName !== "string" || !p.agentName.trim()) {
       throw new Error(
-        `Participant at index ${i} has invalid agentName.`
+        `Participant at ${configKey}[${i}] has invalid agentName.`
       );
     }
     if (!isSafeAgentName(p.agentName)) {
@@ -259,20 +257,32 @@ function resolveParticipants(cwd: string): ParticipantConfig[] {
         `Participant "${p.displayName}" has unsafe agentName "${p.agentName}". Use only letters, digits, dot, underscore, and hyphen; it must start with a letter or digit.`
       );
     }
+    if (seenAgentNames.has(p.agentName)) {
+      throw new Error(
+        `Duplicate agentName "${p.agentName}" in ${configKey}. Each participant must use a distinct agentName.`
+      );
+    }
+    seenAgentNames.add(p.agentName);
     if (typeof p.model !== "string" || !p.model.trim()) {
       throw new Error(
-        `Participant at index ${i} has invalid model.`
+        `Participant at ${configKey}[${i}] has invalid model.`
       );
     }
     if (typeof p.rolePrompt !== "string" || !p.rolePrompt.trim()) {
       throw new Error(
-        `Participant at index ${i} has invalid rolePrompt.`
+        `Participant at ${configKey}[${i}] has invalid rolePrompt.`
       );
     }
   }
 
-  return config.participants;
+  return participants;
 }
+
+function resolveParticipants(cwd: string): ParticipantConfig[] {
+  const config = loadConfig(cwd);
+  return validateParticipants(config.participants, "participants");
+}
+
 
 // ────────────────────────────────────────────────────────
 // Agent file generation
@@ -307,7 +317,7 @@ function generateAgentFile(participant: ParticipantConfig): string {
 
   const whatYouDoLines = (participant.whatYouDo && participant.whatYouDo.length > 0)
     ? participant.whatYouDo.map((item) => `- ${item}`).join("\n")
-    : `- 参与多模型讨论并提供${participant.displayName}视角的分析`;
+    : `- 参与多 Agent 讨论并提供${participant.displayName}视角的分析`;
 
   return [
     "---",
@@ -597,7 +607,7 @@ function buildBrainstormPrompt(
     "- Proceed with the remaining consultants who succeeded",
     "- In your structural overview, clearly mark the failed participant as: \"[displayName] ([agentName]): 本轮未响应 / did not respond\"",
     "- Continue to the next round normally — do NOT skip the consultant in future rounds (they may recover)",
-    "- If the same consultant fails in 2 consecutive rounds, warn the user with the real display name, e.g.: \"DeepSeek 连续两轮失败，建议检查该模型是否可用\"",
+    "- If the same consultant fails in 2 consecutive rounds, warn the user with the real display name, e.g.: \"GPT-Critic 连续两轮失败，建议检查该角色是否可用\"",
     "",
     "### NEVER do this",
     "- Do NOT fabricate or simulate a consultant's response",
@@ -728,7 +738,7 @@ function buildDebatePrompt(
     "- Skip to the next debater in the cycle",
     "- In your structural overview, clearly mark the failed participant as: \"[displayName] ([agentName]): 本轮未响应 / did not respond\"",
     "- Continue the debate with remaining debaters — do NOT abort the whole debate",
-    "- If the same debater fails in 2 consecutive cycles, warn the user with the real display name, e.g.: \"DeepSeek 连续两轮失败，建议检查该模型是否可用\"",
+    "- If the same debater fails in 2 consecutive cycles, warn the user with the real display name, e.g.: \"GPT-Critic 连续两轮失败，建议检查该角色是否可用\"",
     "",
     "### NEVER do this",
     "- Do NOT fabricate or simulate a debater's argument",
@@ -743,6 +753,8 @@ function buildDebatePrompt(
     "- Present: (1) the debate arc, (2) who conceded what, (3) final synthesis.",
   ].join("\n");
 }
+
+
 
 // ────────────────────────────────────────────────────────
 // Helpers
@@ -923,7 +935,7 @@ async function meetingHasEntries(absDir: string): Promise<boolean> {
   return false;
 }
 
-/** Replace the first markdown heading in blackboard.md, preserving Meeting/Debate prefix. */
+/** Replace the first markdown heading in blackboard.md, preserving session prefix. */
 function replaceBlackboardHeading(absDir: string, title: string): void {
   const blackboardPath = path.join(absDir, "blackboard.md");
   assertWritableFilePath(blackboardPath, absDir, "meeting blackboard");
@@ -1263,7 +1275,7 @@ export default function (pi: ExtensionAPI) {
           "Absolute path to the meeting directory (e.g., /path/to/.pi-meetings/2026-06-28-my-topic)",
       }),
       speaker: Type.String({
-        description: "Speaker identifier (e.g., GPT, DeepSeek, MiniMax)",
+        description: "Speaker identifier (e.g., GPT-Progressive, GPT-Localist, GPT-Critic)",
       }),
       phase: Type.String({
         description: "Meeting phase (e.g., Round 1, Round 2, Final)",
@@ -1584,7 +1596,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("brainstorm", {
     description:
-      "Start a multi-model brainstorming session on a topic",
+      "Start a multi-agent brainstorming session on a topic",
     handler: async (args, ctx) => {
       if (!args || !args.trim()) {
         ctx.ui.notify("Usage: /brainstorm <topic>", "warning");
@@ -1661,7 +1673,7 @@ export default function (pi: ExtensionAPI) {
       startWatching(pi, absDir);
 
       ctx.ui.notify(
-        `🧠 Multi-model brainstorm: ${meetingName}\n` +
+        `🧠 Multi-agent brainstorm: ${meetingName}\n` +
           `  Folder: .pi-meetings/${meetingName}/\n` +
           `  Watcher active — entries will appear as cards`,
         "info"
@@ -1776,6 +1788,7 @@ export default function (pi: ExtensionAPI) {
       ]);
     },
   });
+
 
   // ── Cleanup on session shutdown ───────────────────────
 
